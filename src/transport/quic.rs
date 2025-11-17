@@ -88,7 +88,7 @@ impl ConnectionManager {
                 let tx = connection_tx.clone();
                 let manager_clone = manager_clone.clone();
                 tokio::spawn(async move {
-                    // let manager_clone = manager_clone.clone();
+                    
                     match Self::accept_connection(incoming).await {
                         Ok((conn, msg_rx)) => {
                             if let Err(e) = tx.send(conn.clone()).await {
