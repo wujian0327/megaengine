@@ -115,7 +115,7 @@ Add a local Git repository to the network:
 ```bash
 cargo run -- repo add \
   --path /path/to/git/repo \
-  --description "My awesome repository"
+  --description "My repository"
 ```
 
 The repo ID is automatically generated from the Git root commit hash and the node's public key.

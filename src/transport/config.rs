@@ -2,7 +2,6 @@ use anyhow::Result;
 use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
 use quinn::{ClientConfig, IdleTimeout, ServerConfig, TransportConfig, VarInt};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use rustls::server::WebPkiClientVerifier;
 use std::fs::File;
 use std::io::BufReader;
 use std::net::SocketAddr;
@@ -10,6 +9,51 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub const ALPN_QUIC_HTTP: &[&[u8]] = &[b"h3"];
+
+/// 用于开发/测试环境的服务器证书验证器
+/// 跳过所有服务器证书验证，允许自签名证书和不同的 CA
+#[derive(Debug)]
+struct NoServerCertificateVerification;
+
+impl rustls::client::danger::ServerCertVerifier for NoServerCertificateVerification {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        // 跳过验证，允许任何证书
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![
+            rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::ED25519,
+        ]
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct QuicConfig {
@@ -35,19 +79,13 @@ impl QuicConfig {
     }
 
     /// 获取服务器配置
+    /// 注意：不验证客户端证书，仅适用于开发/测试环境
+    /// 生产环境应该使用正确的 CA 证书验证
     pub fn get_server_config(&self) -> Result<ServerConfig> {
         let (certs, key) = self.get_certificate_from_file()?;
 
-        let mut roots = rustls::RootCertStore::empty();
-        let ca_cert = self.get_ca_certificate_from_file()?;
-        roots.add(ca_cert)?;
-
-        let client_verifier = WebPkiClientVerifier::builder(roots.into())
-            .build()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-
         let mut server_crypto = rustls::ServerConfig::builder()
-            .with_client_cert_verifier(client_verifier)
+            .with_no_client_auth() // 不验证客户端证书
             .with_single_cert(certs, key)?;
         server_crypto.alpn_protocols = ALPN_QUIC_HTTP.iter().map(|&x| x.into()).collect();
         server_crypto.max_early_data_size = u32::MAX;
@@ -64,18 +102,16 @@ impl QuicConfig {
     }
 
     /// 获取客户端配置
+    /// 注意：使用不验证服务器证书的配置，仅适用于开发/测试环境
+    /// 生产环境应该使用正确的 CA 证书验证
     pub fn get_client_config(&self) -> Result<ClientConfig> {
-        let mut roots = rustls::RootCertStore::empty();
-        let ca_cert = self.get_ca_certificate_from_file()?;
-        roots.add(ca_cert)?;
         let (certs, key) = self.get_certificate_from_file()?;
 
-        // let mut client_crypto = rustls::ClientConfig::builder()
-        //     .with_root_certificates(roots)
-        //     .with_no_client_auth();
-
+        // 创建一个不验证服务器证书的客户端配置
+        // 这对于开发/测试环境很有用，当每个节点都有独立的证书时
         let mut client_crypto = rustls::ClientConfig::builder()
-            .with_root_certificates(roots)
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoServerCertificateVerification))
             .with_client_auth_cert(certs, key)?;
 
         client_crypto.alpn_protocols = ALPN_QUIC_HTTP.iter().map(|&x| x.into()).collect();

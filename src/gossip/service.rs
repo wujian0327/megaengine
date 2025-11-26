@@ -12,6 +12,7 @@ use std::convert::TryInto;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex};
+use tracing::info;
 
 const DEFAULT_TTL: u8 = 16;
 
@@ -64,6 +65,12 @@ impl GossipService {
                 struct Envelope {
                     payload: SignedMessage,
                     ttl: u8,
+                }
+                {
+                    let mgr = s2.manager.lock().await;
+                    mgr.list_peers().await.into_iter().for_each(|peer| {
+                        info!("Connected peer: {}", peer);
+                    });
                 }
 
                 // 1. 发送 NodeAnnouncement
@@ -156,11 +163,14 @@ impl GossipService {
             let sig_bytes = hex::decode(&signed.signature).unwrap_or_default();
             let arr: [u8; 64] = match sig_bytes.as_slice().try_into() {
                 Ok(a) => a,
-                Err(_) => return Ok(()),
+                Err(e) => {
+                    tracing::error!("Failed to convert signature bytes: {}", e);
+                    return Ok(());
+                }
             };
             let sig = Signature::from_bytes(&arr);
             if !kp.verify(&signed.self_hash(), &sig) {
-                tracing::warn!(
+                tracing::error!(
                     "signature verification failed for message from {}",
                     signed.node_id
                 );
@@ -172,9 +182,10 @@ impl GossipService {
         match &signed.message {
             GossipMessage::NodeAnnouncement(na) => {
                 tracing::info!(
-                    "Gossip: NodeAnnouncement from {} (alias: {})",
+                    "Gossip: NodeAnnouncement from {} (alias: {}, addresses: {:?})",
                     na.node_id,
-                    na.alias
+                    na.alias,
+                    na.addresses,
                 );
                 // TODO: update NodeManager or Node routing table
             }

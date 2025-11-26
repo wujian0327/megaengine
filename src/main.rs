@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use megaengine::node::node_addr::NodeAddr;
 use std::net::SocketAddr;
 
 use megaengine::gossip::GossipService;
@@ -61,9 +62,23 @@ enum NodeAction {
 
         #[arg(short, long, default_value = "cert")]
         cert_path: String,
+
+        /// Bootstrap node address to connect to on startup (e.g., 127.0.0.1:9000)
+        #[arg(long)]
+        bootstrap_node: Option<String>,
     },
     /// Print node id using stored keypair
     Id,
+    /// Connect to another node
+    Connect {
+        /// Target node's address (e.g., 127.0.0.1:9001)
+        #[arg(long)]
+        peer_addr: String,
+
+        /// Target node's ID
+        #[arg(long)]
+        peer_id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -78,16 +93,22 @@ enum RepoAction {
         #[arg(long, default_value = "")]
         description: String,
     },
+    /// List all repositories
+    List,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
+
+    // 初始化 tracing 日志
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("error,megaengine=info"));
+
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("megaengine=info".parse().unwrap()),
-        )
+        .with_env_filter(env_filter)
+        .with_target(true)
+        .with_level(true)
         .init();
 
     let cli = Cli::parse();
@@ -129,6 +150,7 @@ async fn main() -> Result<()> {
                 alias,
                 addr,
                 cert_path,
+                bootstrap_node,
             } => {
                 tracing::info!("Starting node...");
                 let cert_dir = format!("{}/{}", &root_path, cert_path);
@@ -151,7 +173,7 @@ async fn main() -> Result<()> {
 
                 let mut node = megaengine::node::node::Node::from_keypair(
                     &kp,
-                    alias,
+                    &alias,
                     addrs.clone(),
                     megaengine::node::node::NodeType::Normal,
                 );
@@ -170,6 +192,7 @@ async fn main() -> Result<()> {
 
                 tracing::info!("Starting QUIC server on {}...", addr);
                 node.start_quic_server(quic_config).await?;
+
                 if let Some(conn_mgr) = &node.connection_manager {
                     let gossip = std::sync::Arc::new(GossipService::new(
                         std::sync::Arc::clone(conn_mgr),
@@ -182,12 +205,69 @@ async fn main() -> Result<()> {
                     tracing::warn!("No connection manager found, gossip not started");
                 }
 
+                // 如果提供了 bootstrap_node，尝试连接到它
+                if let Some(bootstrap_addr_str) = bootstrap_node {
+                    if let Some(conn_mgr) = &node.connection_manager {
+                        tracing::info!(
+                            "Attempting to connect to bootstrap node: {}",
+                            bootstrap_addr_str
+                        );
+
+                        match NodeAddr::parse(&bootstrap_addr_str) {
+                            Ok(bootstrap_info) => {
+                                match conn_mgr
+                                    .lock()
+                                    .await
+                                    .connect(
+                                        node.node_id().clone(),
+                                        bootstrap_info.peer_id.clone(),
+                                        vec![bootstrap_info.address],
+                                    )
+                                    .await
+                                {
+                                    Ok(_) => {
+                                        tracing::info!(
+                                            "Successfully connected to bootstrap node {} at {}",
+                                            bootstrap_info.peer_id,
+                                            bootstrap_info.address
+                                        );
+                                        println!(
+                                            "Connected to bootstrap node: {} at {}",
+                                            bootstrap_info.peer_id, bootstrap_info.address
+                                        );
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Failed to connect to bootstrap node: {}",
+                                            e
+                                        );
+                                        eprintln!(
+                                            "Warning: Failed to connect to bootstrap node: {}",
+                                            e
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to parse bootstrap node address: {}", e);
+                                eprintln!("Error: {}", e);
+                                return Err(e);
+                            }
+                        }
+                    }
+                }
+
                 println!(
                     "Node started successfully: {} ({})",
                     node.node_id().0,
                     node.alias()
                 );
                 println!("Listening on: {}", addr);
+
+                // 打印 node 地址
+                let addr = NodeAddr::new(node.node_id().clone(), addr.parse()?);
+                println!("Node address: {}", addr.to_string());
+
                 println!("Press Ctrl+C to stop");
 
                 loop {
@@ -206,6 +286,11 @@ async fn main() -> Result<()> {
 
                 let node_id = NodeId::from_keypair(&kp);
                 println!("{}", node_id);
+            }
+            NodeAction::Connect { peer_addr, peer_id } => {
+                // TODO: implement node connect
+                println!("Connect not yet implemented");
+                println!("Would connect to {} with peer_id {}", peer_addr, peer_id);
             }
         },
         Commands::Repo { action } => {
@@ -259,6 +344,29 @@ async fn main() -> Result<()> {
                         Err(e) => tracing::info!("Failed to add repo: {}", e),
                     }
                 }
+                RepoAction::List => match storage::repo_model::list_repos().await {
+                    Ok(repos) => {
+                        if repos.is_empty() {
+                            println!("No repositories found");
+                        } else {
+                            println!("Repositories:");
+                            println!("{}", "─".repeat(100));
+                            for repo in repos {
+                                println!("  ID:          {}", repo.repo_id);
+                                println!("  Name:        {}", repo.p2p_description.name);
+                                println!("  Creator:     {}", repo.p2p_description.creator);
+                                println!("  Description: {}", repo.p2p_description.description);
+                                println!("  Path:        {}", repo.path.display());
+                                println!("  Timestamp:   {}", repo.p2p_description.timestamp);
+                                println!("{}", "─".repeat(100));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to list repos: {}", e);
+                        println!("Failed to list repositories: {}", e);
+                    }
+                },
             }
         }
     }

@@ -101,6 +101,7 @@ async fn test_gossip_three_nodes_message_relay() {
     // 6. 连接成链 node1 <-> node2 <-> node3
     let mgr1 = node1.connection_manager.as_ref().unwrap().clone();
     let mgr2 = node2.connection_manager.as_ref().unwrap().clone();
+    let mgr3 = node3.connection_manager.as_ref().unwrap().clone();
     mgr1.lock()
         .await
         .connect(
@@ -132,6 +133,17 @@ async fn test_gossip_three_nodes_message_relay() {
         .unwrap();
 
     // 8. 等待消息传播
-    sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(1)).await;
+
+    // 8. node1 发送 gossip 消息（NodeAnnouncement）
+    let signed = SignedMessage::new_node_sign_message(node3.clone()).unwrap();
+    let env = serde_json::to_vec(&serde_json::json!({"payload": signed, "ttl": 3})).unwrap();
+    mgr3.lock()
+        .await
+        .send_message(node2.node_id().clone(), env)
+        .await
+        .unwrap();
+
     // 这里只能通过日志人工观察传播效果，或后续扩展 GossipService 提供 hook/回调收集消息
+    sleep(Duration::from_secs(1)).await;
 }

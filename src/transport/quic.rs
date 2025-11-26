@@ -233,7 +233,7 @@ impl ConnectionManager {
         send.finish()?;
 
         let quic_conn = QuicConnection {
-            connection,
+            connection: connection.clone(),
             peer_addr,
             node_id: target_node_id.clone(),
             connection_type: ConnectionType::Client,
@@ -245,6 +245,22 @@ impl ConnectionManager {
             .await
             .insert(target_node_id.clone(), Arc::from(quic_conn.clone()));
 
+        // 启动消息接收任务，用于接收服务端发来的消息
+        let peer_id = target_node_id.clone();
+        let connection_clone = connection.clone();
+        let incoming_sender = Arc::clone(&self.incoming_sender);
+        tokio::spawn(async move {
+            while let Ok(mut recv) = connection_clone.accept_uni().await {
+                if let Ok(msg) = recv.read_to_end(READ_BUF_SIZE).await {
+                    // 转发给注册的 incoming_sender（如 GossipService）
+                    let maybe = incoming_sender.lock().await;
+                    if let Some(tx) = maybe.as_ref() {
+                        let _ = tx.send((peer_id.clone(), msg)).await;
+                    }
+                }
+            }
+        });
+
         Ok(())
     }
 
@@ -254,6 +270,7 @@ impl ConnectionManager {
             "Failed to send message to node[{}], connection not found",
             node_id
         ))?;
+
         let mut sender = conn.connection.open_uni().await?;
         sender.write_all(message.as_slice()).await?;
         sender.finish()?;
