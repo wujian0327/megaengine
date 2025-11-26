@@ -1,3 +1,4 @@
+pub mod bundle;
 pub mod git;
 pub mod gossip;
 pub mod identity;

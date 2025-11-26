@@ -102,12 +102,22 @@ mod tests {
 
         let repo = Repo::new(repo_id.to_string(), desc, PathBuf::from("/tmp/test-repo"));
 
-        let before = manager.repo_count().await?;
+        // 清理之前可能存在的测试数据
+        let _ = manager.remove_repo(repo_id).await;
+
+        // 注册前，确保 repo 不存在
+        let before = manager.get_repo(repo_id).await?;
+        assert!(
+            before.is_none(),
+            "repo should not exist before registration"
+        );
+
+        // 注册 repo
         assert!(manager.register_repo(repo).await.is_ok());
-        let count = manager.repo_count().await?;
-        assert!(count >= before);
+
+        // 验证 repo 已注册
         let loaded = manager.get_repo(repo_id).await?;
-        assert!(loaded.is_some());
+        assert!(loaded.is_some(), "repo should exist after registration");
 
         // 清理测试数据
         manager.remove_repo(repo_id).await?;
@@ -134,18 +144,34 @@ mod tests {
             PathBuf::from("/tmp/test-repo-persist"),
         );
 
-        let before = manager.repo_count().await?;
+        // 清理之前可能存在的测试数据
+        let _ = manager.remove_repo(repo_id).await;
+
+        // 注册前，确保 repo 不存在
+        let before = manager.get_repo(repo_id).await?;
+        assert!(
+            before.is_none(),
+            "repo should not exist before registration"
+        );
+
+        // 注册 repo
         assert!(manager.register_repo(repo).await.is_ok());
-        let count = manager.repo_count().await?;
-        assert!(count >= before);
+
+        // 验证 repo 已注册
+        let loaded = manager.get_repo(repo_id).await?;
+        assert!(loaded.is_some(), "repo should exist after registration");
 
         // 删除仓库
         let result = manager.remove_repo(repo_id).await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_some());
+
         // 验证数据库中已删除该 repo
         let loaded_after = manager.get_repo(repo_id).await?;
-        assert!(loaded_after.is_none());
+        assert!(
+            loaded_after.is_none(),
+            "repo should not exist after deletion"
+        );
 
         Ok(())
     }

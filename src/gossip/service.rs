@@ -16,7 +16,7 @@ use tokio::sync::{mpsc, Mutex};
 
 const DEFAULT_TTL: u8 = 16;
 
-/// 简单的 gossip 服务：接收来自 QUIC 的消息，去重、验签、处理并转发给邻居
+/// 简单的 gossip 服务：接收来自 QUIC 的 Gossip 控制消息，去重、验签、处理并转发给邻居
 #[allow(dead_code)]
 pub struct GossipService {
     manager: Arc<Mutex<ConnectionManager>>,
@@ -45,20 +45,20 @@ impl GossipService {
         }
     }
 
-    /// Start the gossip service: register incoming channel and spawn handler + periodic broadcaster
+    /// Start the gossip service: register gossip channel and spawn handler + periodic broadcaster
     pub async fn start(self: Arc<Self>) -> Result<()> {
-        let (tx, mut rx) = mpsc::channel::<(NodeId, Vec<u8>)>(256);
+        // 注册 Gossip 控制消息接收器
+        let (gossip_tx, mut gossip_rx) = mpsc::channel::<(NodeId, Vec<u8>)>(256);
 
-        // register incoming sender with connection manager
         {
             let mgr = self.manager.lock().await;
-            mgr.register_incoming_sender(tx).await;
+            mgr.register_gossip_sender(gossip_tx).await;
         }
 
-        // clone for handler task
+        // Gossip 消息处理任务
         let s = Arc::clone(&self);
         tokio::spawn(async move {
-            while let Some((from, data)) = rx.recv().await {
+            while let Some((from, data)) = gossip_rx.recv().await {
                 let _ = s.handle_incoming(from, data).await;
             }
         });
@@ -78,7 +78,7 @@ impl GossipService {
                     let peers = mgr.list_peers().await;
                     tracing::debug!("Send NodeAnnouncement to {} peers", peers.len());
                     for peer in peers {
-                        let _ = mgr.send_message(peer.clone(), data.clone()).await;
+                        let _ = mgr.send_gossip_message(peer.clone(), data.clone()).await;
                     }
                 }
 
@@ -96,7 +96,7 @@ impl GossipService {
                             let mgr = s2.manager.lock().await;
                             let peers = mgr.list_peers().await;
                             for peer in peers {
-                                let _ = mgr.send_message(peer.clone(), data.clone()).await;
+                                let _ = mgr.send_gossip_message(peer.clone(), data.clone()).await;
                             }
                         }
                     }
@@ -231,7 +231,7 @@ impl GossipService {
                 if peer == from {
                     continue;
                 }
-                let _ = mgr.send_message(peer.clone(), data.clone()).await;
+                let _ = mgr.send_gossip_message(peer.clone(), data.clone()).await;
             }
         }
 

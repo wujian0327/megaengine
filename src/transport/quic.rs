@@ -15,8 +15,14 @@ use tokio::sync::mpsc::Sender as TokioSender;
 const READ_BUF_SIZE: usize = 1024 * 1024;
 const CONNECTION_CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
 
-// Type alias for incoming message sender to reduce type complexity
-type IncomingMessageSender = Arc<Mutex<Option<TokioSender<(NodeId, Vec<u8>)>>>>;
+// 消息前缀：用于区分 Gossip 控制消息和数据传输
+const GOSSIP_MESSAGE_PREFIX: &[u8] = b"GOSSIP:";
+const DATA_MESSAGE_PREFIX: &[u8] = b"DATA:";
+
+// Type alias for Gossip 消息发送端（控制流）
+type GossipMessageSender = Arc<Mutex<Option<TokioSender<(NodeId, Vec<u8>)>>>>;
+// Type alias for 数据传输发送端（数据流）
+type DataMessageSender = Arc<Mutex<Option<TokioSender<(NodeId, Vec<u8>)>>>>;
 
 #[derive(Debug, Clone)]
 pub struct ConnectionManager {
@@ -25,7 +31,9 @@ pub struct ConnectionManager {
     endpoint: Arc<Endpoint>,
     connection_tx: mpsc::Sender<QuicConnection>,
     connections: Arc<Mutex<HashMap<NodeId, Arc<QuicConnection>>>>,
-    incoming_sender: IncomingMessageSender,
+    // 区分 Gossip 消息（控制流）和数据传输流
+    gossip_sender: GossipMessageSender,
+    data_sender: DataMessageSender,
 }
 
 #[derive(Debug, Clone)]
@@ -63,7 +71,8 @@ impl ConnectionManager {
             endpoint: Arc::new(endpoint),
             connection_tx,
             connections: Arc::new(Mutex::new(HashMap::new())),
-            incoming_sender: Arc::new(Mutex::new(None)),
+            gossip_sender: Arc::new(Mutex::new(None)),
+            data_sender: Arc::new(Mutex::new(None)),
         };
         Ok((transport, connection_rx))
     }
@@ -83,7 +92,6 @@ impl ConnectionManager {
                 let tx = connection_tx.clone();
                 let manager_clone = manager_clone.clone();
                 tokio::spawn(async move {
-                    
                     match Self::accept_connection(incoming).await {
                         Ok((conn, msg_rx)) => {
                             if let Err(e) = tx.send(conn.clone()).await {
@@ -154,27 +162,69 @@ impl ConnectionManager {
         ))
     }
 
-    /// 生成消息处理任务，将接收到的消息转发到注册的 incoming_sender（包含发送者 NodeId）
+    /// 生成消息处理任务，将接收到的消息路由到对应的处理器（Gossip 或数据传输）
+    ///
+    /// 路由策略基于消息前缀：
+    /// - b"GOSSIP:" 前缀：路由到 gossip_sender（控制流消息）
+    /// - b"DATA:" 前缀：路由到 data_sender（数据传输）
+    /// - 无前缀：默认路由到 gossip_sender（向后兼容）
     async fn spawn_message_handler(&self, peer_id: NodeId, mut receiver: Receiver<Vec<u8>>) {
-        let incoming = Arc::clone(&self.incoming_sender);
+        let gossip = Arc::clone(&self.gossip_sender);
+        let data = Arc::clone(&self.data_sender);
+
         tokio::spawn(async move {
-            while let Some(data) = receiver.recv().await {
-                // forward to registered gossip handler if present
-                let maybe = incoming.lock().await;
-                if let Some(tx) = maybe.as_ref() {
-                    let _ = tx.send((peer_id.clone(), data)).await;
+            while let Some(bytes) = receiver.recv().await {
+                // 检查消息前缀来路由
+                let is_data_transfer = bytes.starts_with(DATA_MESSAGE_PREFIX);
+
+                if is_data_transfer {
+                    // 移除前缀并转发到 data_sender
+                    let payload = bytes[DATA_MESSAGE_PREFIX.len()..].to_vec();
+                    let maybe_data = data.lock().await;
+                    if let Some(tx) = maybe_data.as_ref() {
+                        let _ = tx.send((peer_id.clone(), payload)).await;
+                        continue;
+                    }
+                }
+
+                // 检查并移除 GOSSIP 前缀（如果存在）
+                let payload = if bytes.starts_with(GOSSIP_MESSAGE_PREFIX) {
+                    bytes[GOSSIP_MESSAGE_PREFIX.len()..].to_vec()
                 } else {
-                    let message = String::from_utf8(data).unwrap_or_default();
+                    bytes.clone()
+                };
+
+                // 路由到 gossip_sender
+                let maybe_gossip = gossip.lock().await;
+                if let Some(tx) = maybe_gossip.as_ref() {
+                    let _ = tx.send((peer_id.clone(), payload)).await;
+                } else {
+                    let message = String::from_utf8(payload).unwrap_or_default();
                     info!("Received message from {}: {}", peer_id, message);
                 }
             }
         });
     }
 
-    /// Register a channel to receive incoming messages from peers: (peer_id, bytes)
-    pub async fn register_incoming_sender(&self, tx: TokioSender<(NodeId, Vec<u8>)>) {
-        let mut guard = self.incoming_sender.lock().await;
+    /// 注册 Gossip 消息接收器（用于控制流消息）
+    pub async fn register_gossip_sender(&self, tx: TokioSender<(NodeId, Vec<u8>)>) {
+        let mut guard = self.gossip_sender.lock().await;
         *guard = Some(tx);
+    }
+
+    /// 注册数据传输接收器（用于大文件/二进制数据）
+    pub async fn register_data_sender(&self, tx: TokioSender<(NodeId, Vec<u8>)>) {
+        let mut guard = self.data_sender.lock().await;
+        *guard = Some(tx);
+    }
+
+    /// 向后兼容：注册 incoming 消息接收器（废弃，改用 register_gossip_sender）
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `register_gossip_sender()` instead for Gossip messages"
+    )]
+    pub async fn register_incoming_sender(&self, tx: TokioSender<(NodeId, Vec<u8>)>) {
+        self.register_gossip_sender(tx).await;
     }
 
     /// Return list of connected peer NodeIds
@@ -267,14 +317,36 @@ impl ConnectionManager {
         // 启动消息接收任务，用于接收服务端发来的消息
         let peer_id = target_node_id.clone();
         let connection_clone = connection.clone();
-        let incoming_sender = Arc::clone(&self.incoming_sender);
+        let gossip_sender = Arc::clone(&self.gossip_sender);
+        let data_sender = Arc::clone(&self.data_sender);
+
         tokio::spawn(async move {
             while let Ok(mut recv) = connection_clone.accept_uni().await {
                 if let Ok(msg) = recv.read_to_end(READ_BUF_SIZE).await {
-                    // 转发给注册的 incoming_sender（如 GossipService）
-                    let maybe = incoming_sender.lock().await;
-                    if let Some(tx) = maybe.as_ref() {
-                        let _ = tx.send((peer_id.clone(), msg)).await;
+                    // 基于前缀路由消息
+                    let is_data_transfer = msg.starts_with(DATA_MESSAGE_PREFIX);
+
+                    if is_data_transfer {
+                        // 移除前缀并路由到 data_sender
+                        let payload = msg[DATA_MESSAGE_PREFIX.len()..].to_vec();
+                        let maybe_data = data_sender.lock().await;
+                        if let Some(tx) = maybe_data.as_ref() {
+                            let _ = tx.send((peer_id.clone(), payload)).await;
+                            continue;
+                        }
+                    }
+
+                    // 检查并移除 GOSSIP 前缀（如果存在）
+                    let payload = if msg.starts_with(GOSSIP_MESSAGE_PREFIX) {
+                        msg[GOSSIP_MESSAGE_PREFIX.len()..].to_vec()
+                    } else {
+                        msg.clone()
+                    };
+
+                    // 路由到 gossip_sender
+                    let maybe_gossip = gossip_sender.lock().await;
+                    if let Some(tx) = maybe_gossip.as_ref() {
+                        let _ = tx.send((peer_id.clone(), payload)).await;
                     }
                 }
             }
@@ -285,15 +357,33 @@ impl ConnectionManager {
 
     pub async fn send_message(&self, node_id: NodeId, message: Vec<u8>) -> Result<()> {
         let connections = self.connections.lock().await;
-        let conn = connections.get(&node_id).with_context(|| format!(
-            "Failed to send message to node[{}], connection not found",
-            node_id
-        ))?;
+        let conn = connections.get(&node_id).with_context(|| {
+            format!(
+                "Failed to send message to node[{}], connection not found",
+                node_id
+            )
+        })?;
 
         let mut sender = conn.connection.open_uni().await?;
         sender.write_all(message.as_slice()).await?;
         sender.finish()?;
         Ok(())
+    }
+
+    /// 发送 Gossip 消息（会自动添加 GOSSIP: 前缀）
+    pub async fn send_gossip_message(&self, node_id: NodeId, message: Vec<u8>) -> Result<()> {
+        let mut prefixed = Vec::with_capacity(GOSSIP_MESSAGE_PREFIX.len() + message.len());
+        prefixed.extend_from_slice(GOSSIP_MESSAGE_PREFIX);
+        prefixed.extend_from_slice(&message);
+        self.send_message(node_id, prefixed).await
+    }
+
+    /// 发送数据消息（会自动添加 DATA: 前缀，用于大文件传输）
+    pub async fn send_data_message(&self, node_id: NodeId, message: Vec<u8>) -> Result<()> {
+        let mut prefixed = Vec::with_capacity(DATA_MESSAGE_PREFIX.len() + message.len());
+        prefixed.extend_from_slice(DATA_MESSAGE_PREFIX);
+        prefixed.extend_from_slice(&message);
+        self.send_message(node_id, prefixed).await
     }
 }
 

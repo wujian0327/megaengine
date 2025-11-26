@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use megaengine::bundle::BundleService;
 use megaengine::git::git_repo::{repo_name_space, repo_root_commit_bytes};
 use megaengine::git::pack::pack_repo_bundle;
 use megaengine::node::node_addr::NodeAddr;
@@ -200,6 +201,7 @@ async fn main() -> Result<()> {
                 node.start_quic_server(quic_config).await?;
 
                 if let Some(conn_mgr) = &node.connection_manager {
+                    // 启动 Gossip 服务
                     let gossip = std::sync::Arc::new(GossipService::new(
                         std::sync::Arc::clone(conn_mgr),
                         node.clone(),
@@ -207,8 +209,17 @@ async fn main() -> Result<()> {
                     ));
                     tokio::spawn(gossip.start());
                     tracing::info!("Gossip protocol started");
+
+                    // 启动 Bundle 传输服务
+                    let bundle_storage = std::path::PathBuf::from("./data/bundles");
+                    let bundle_service = std::sync::Arc::new(BundleService::new(
+                        std::sync::Arc::clone(conn_mgr),
+                        bundle_storage,
+                    ));
+                    tokio::spawn(bundle_service.start());
+                    tracing::info!("Bundle transfer service started");
                 } else {
-                    tracing::warn!("No connection manager found, gossip not started");
+                    tracing::warn!("No connection manager found, services not started");
                 }
 
                 // 如果提供了 bootstrap_node，尝试连接到它
