@@ -83,7 +83,7 @@ impl ConnectionManager {
                 let tx = connection_tx.clone();
                 let manager_clone = manager_clone.clone();
                 tokio::spawn(async move {
-                    // let manager_clone = manager_clone.clone();
+                    
                     match Self::accept_connection(incoming).await {
                         Ok((conn, msg_rx)) => {
                             if let Err(e) = tx.send(conn.clone()).await {
@@ -285,7 +285,7 @@ impl ConnectionManager {
 
     pub async fn send_message(&self, node_id: NodeId, message: Vec<u8>) -> Result<()> {
         let connections = self.connections.lock().await;
-        let conn = connections.get(&node_id).context(format!(
+        let conn = connections.get(&node_id).with_context(|| format!(
             "Failed to send message to node[{}], connection not found",
             node_id
         ))?;
