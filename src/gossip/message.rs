@@ -8,7 +8,7 @@ use crate::{
         node::{Node, NodeType},
         node_id::NodeId,
     },
-    repo::repo_id::RepoId,
+    repo::repo::Repo,
     util::timestamp_now,
 };
 
@@ -43,11 +43,11 @@ impl From<Node> for NodeAnnouncement {
     }
 }
 
-/// 仓库公告- 表示某个节点拥有的仓库列表
+/// 仓库公告- 表示某个节点拥有的仓库列表（path 为空）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoAnnouncement {
     pub node_id: NodeId,
-    pub repos: Vec<RepoId>,
+    pub repos: Vec<Repo>,
 }
 
 /// 带签名的消息包装
@@ -77,10 +77,19 @@ impl SignedMessage {
         Ok(sign_message)
     }
 
-    pub fn new_repo_sign_message(repos: Vec<RepoId>, node: Node) -> Result<Self> {
+    pub fn new_repo_sign_message(repos: Vec<Repo>, node: Node) -> Result<Self> {
+        // 转换 repos，清空 path
+        let repos_with_empty_path = repos
+            .into_iter()
+            .map(|mut repo| {
+                repo.path = std::path::PathBuf::new();
+                repo
+            })
+            .collect();
+
         let message = GossipMessage::RepoAnnouncement(RepoAnnouncement {
             node_id: node.node_id().clone(),
-            repos,
+            repos: repos_with_empty_path,
         });
 
         let mut sign_message = SignedMessage {
@@ -177,23 +186,38 @@ mod tests {
             crate::node::node::NodeType::Relay,
         );
 
-        // generate a repo id
+        // generate a repo
         let repo_id = crate::repo::repo_id::RepoId::generate(
             b"root_commit",
             node_keypair_bytes(&keypair).as_slice(),
         )
         .expect("generate repo id");
 
-        let signed = SignedMessage::new_repo_sign_message(vec![repo_id.clone()], node.clone())
+        let desc = crate::repo::repo::P2PDescription {
+            creator: "did:key:test".to_string(),
+            name: "test-repo".to_string(),
+            description: "A test repository".to_string(),
+            timestamp: 1000,
+        };
+
+        let repo = Repo::new(
+            repo_id.to_string(),
+            desc,
+            std::path::PathBuf::from("/tmp/test-repo"),
+        );
+
+        let signed = SignedMessage::new_repo_sign_message(vec![repo.clone()], node.clone())
             .expect("sign repo message");
 
         assert_eq!(signed.message_type(), "inventory_announcement");
         let sig = hex::decode(&signed.signature).expect("decode hex");
         assert_eq!(sig.len(), 64);
 
-        // ensure the embedded repo id is present in message
+        // ensure the embedded repo is present in message and path is empty
         if let GossipMessage::RepoAnnouncement(ra) = signed.message {
-            assert!(ra.repos.iter().any(|r| r.as_str() == repo_id.as_str()));
+            assert!(ra.repos.iter().any(|r| r.repo_id == repo_id.to_string()));
+            // verify path is cleared
+            assert!(ra.repos.iter().all(|r| r.path.as_os_str().is_empty()));
         } else {
             panic!("expected RepoAnnouncement");
         }

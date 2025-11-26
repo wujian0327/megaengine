@@ -1,11 +1,12 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use megaengine::git::git_repo::{repo_name_space, repo_root_commit_bytes};
+use megaengine::git::pack::pack_repo_bundle;
 use megaengine::node::node_addr::NodeAddr;
 use std::net::SocketAddr;
 
 use megaengine::gossip::GossipService;
 use megaengine::{
-    git::{repo_name_space, repo_root_commit_bytes},
     node::node_id::NodeId,
     repo::{self, repo_id::RepoId},
     storage,
@@ -69,16 +70,6 @@ enum NodeAction {
     },
     /// Print node id using stored keypair
     Id,
-    /// Connect to another node
-    Connect {
-        /// Target node's address (e.g., 127.0.0.1:9001)
-        #[arg(long)]
-        peer_addr: String,
-
-        /// Target node's ID
-        #[arg(long)]
-        peer_id: String,
-    },
 }
 
 #[derive(Subcommand)]
@@ -95,6 +86,20 @@ enum RepoAction {
     },
     /// List all repositories
     List,
+    /// Pack a repository into a distributable format
+    Pack {
+        /// Repository path to pack
+        #[arg(long)]
+        path: String,
+
+        /// Output file path for the bundle
+        #[arg(long)]
+        output: String,
+
+        /// Pack format: bundle, tar, or metadata
+        #[arg(long, default_value = "bundle")]
+        format: String,
+    },
 }
 
 #[tokio::main]
@@ -287,88 +292,106 @@ async fn main() -> Result<()> {
                 let node_id = NodeId::from_keypair(&kp);
                 println!("{}", node_id);
             }
-            NodeAction::Connect { peer_addr, peer_id } => {
-                // TODO: implement node connect
-                println!("Connect not yet implemented");
-                println!("Would connect to {} with peer_id {}", peer_addr, peer_id);
-            }
         },
-        Commands::Repo { action } => {
-            match action {
-                RepoAction::Add { path, description } => {
-                    let kp = match storage::load_keypair() {
-                        Ok(k) => k,
+        Commands::Repo { action } => match action {
+            RepoAction::Add { path, description } => {
+                let kp = match storage::load_keypair() {
+                    Ok(k) => k,
+                    Err(e) => {
+                        tracing::error!("failed to load keypair: {}", e);
+                        tracing::info!("Run `auth init` first to generate keys");
+                        return Ok(());
+                    }
+                };
+                let node_id = NodeId::from_keypair(&kp);
+
+                let root_bytes = match repo_root_commit_bytes(&path) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        tracing::error!("failed to read repo root commit: {}", e);
+                        println!(
+                            "Ensure the provided path is a git repository with at least one commit"
+                        );
+                        return Ok(());
+                    }
+                };
+
+                let repo_id =
+                    match RepoId::generate(root_bytes.as_slice(), &kp.verifying_key_bytes()) {
+                        Ok(id) => id,
                         Err(e) => {
-                            tracing::error!("failed to load keypair: {}", e);
-                            tracing::info!("Run `auth init` first to generate keys");
+                            tracing::error!("Failed to generate RepoId: {}", e);
                             return Ok(());
                         }
                     };
-                    let node_id = NodeId::from_keypair(&kp);
 
-                    let root_bytes = match repo_root_commit_bytes(&path) {
-                        Ok(b) => b,
-                        Err(e) => {
-                            tracing::error!("failed to read repo root commit: {}", e);
-                            println!("Ensure the provided path is a git repository with at least one commit");
-                            return Ok(());
+                let name = repo_name_space(&path);
+                let desc = repo::repo::P2PDescription {
+                    creator: node_id.to_string(),
+                    name: name.clone(),
+                    description: description.clone(),
+                    timestamp: timestamp_now(),
+                };
+
+                let repo = repo::repo::Repo::new(
+                    repo_id.to_string(),
+                    desc,
+                    std::path::PathBuf::from(path),
+                );
+
+                let mut manager = repo::repo_manager::RepoManager::new();
+                match manager.register_repo(repo).await {
+                    Ok(_) => tracing::info!("Repo {} added", repo_id),
+                    Err(e) => tracing::info!("Failed to add repo: {}", e),
+                }
+            }
+            RepoAction::List => match storage::repo_model::list_repos().await {
+                Ok(repos) => {
+                    if repos.is_empty() {
+                        println!("No repositories found");
+                    } else {
+                        println!("Repositories:");
+                        println!("{}", "─".repeat(100));
+                        for repo in repos {
+                            println!("  ID:          {}", repo.repo_id);
+                            println!("  Name:        {}", repo.p2p_description.name);
+                            println!("  Creator:     {}", repo.p2p_description.creator);
+                            println!("  Description: {}", repo.p2p_description.description);
+                            println!("  Path:        {}", repo.path.display());
+                            println!("  Timestamp:   {}", repo.p2p_description.timestamp);
+                            println!("{}", "─".repeat(100));
                         }
-                    };
-
-                    let repo_id =
-                        match RepoId::generate(root_bytes.as_slice(), &kp.verifying_key_bytes()) {
-                            Ok(id) => id,
-                            Err(e) => {
-                                tracing::error!("Failed to generate RepoId: {}", e);
-                                return Ok(());
-                            }
-                        };
-
-                    let name = repo_name_space(&path);
-                    let desc = repo::repo::P2PDescription {
-                        creator: node_id.to_string(),
-                        name: name.clone(),
-                        description: description.clone(),
-                        timestamp: timestamp_now(),
-                    };
-
-                    let repo = repo::repo::Repo::new(
-                        repo_id.to_string(),
-                        desc,
-                        std::path::PathBuf::from(path),
-                    );
-
-                    let mut manager = repo::repo_manager::RepoManager::new();
-                    match manager.register_repo(repo).await {
-                        Ok(_) => tracing::info!("Repo {} added", repo_id),
-                        Err(e) => tracing::info!("Failed to add repo: {}", e),
                     }
                 }
-                RepoAction::List => match storage::repo_model::list_repos().await {
-                    Ok(repos) => {
-                        if repos.is_empty() {
-                            println!("No repositories found");
-                        } else {
-                            println!("Repositories:");
-                            println!("{}", "─".repeat(100));
-                            for repo in repos {
-                                println!("  ID:          {}", repo.repo_id);
-                                println!("  Name:        {}", repo.p2p_description.name);
-                                println!("  Creator:     {}", repo.p2p_description.creator);
-                                println!("  Description: {}", repo.p2p_description.description);
-                                println!("  Path:        {}", repo.path.display());
-                                println!("  Timestamp:   {}", repo.p2p_description.timestamp);
-                                println!("{}", "─".repeat(100));
-                            }
-                        }
+                Err(e) => {
+                    tracing::error!("Failed to list repos: {}", e);
+                    println!("Failed to list repositories: {}", e);
+                }
+            },
+            RepoAction::Pack {
+                path,
+                output,
+                format,
+            } => match format.as_str() {
+                "bundle" => match pack_repo_bundle(&path, &output) {
+                    Ok(_) => {
+                        let file_size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
+                        println!("✓ Bundle created successfully");
+                        println!("  Output: {}", output);
+                        println!("  Size: {} bytes", file_size);
                     }
                     Err(e) => {
-                        tracing::error!("Failed to list repos: {}", e);
-                        println!("Failed to list repositories: {}", e);
+                        eprintln!("✗ Failed to create bundle: {}", e);
                     }
                 },
-            }
-        }
+                _ => {
+                    eprintln!(
+                        "✗ Unknown format: {}. Use 'bundle', 'tar', or 'metadata'",
+                        format
+                    );
+                }
+            },
+        },
     }
 
     Ok(())

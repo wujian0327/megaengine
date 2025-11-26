@@ -1,7 +1,8 @@
 use crate::gossip::message::{GossipMessage, SignedMessage};
-use crate::node::node::Node;
+use crate::node::node::{Node, NodeInfo};
 use crate::node::node_id::NodeId;
 use crate::repo::repo_manager::RepoManager;
+use crate::storage::node_model;
 use crate::transport::quic::ConnectionManager;
 use anyhow::Result;
 use ed25519_dalek::Signature;
@@ -12,7 +13,6 @@ use std::convert::TryInto;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex};
-use tracing::info;
 
 const DEFAULT_TTL: u8 = 16;
 
@@ -66,12 +66,6 @@ impl GossipService {
                     payload: SignedMessage,
                     ttl: u8,
                 }
-                {
-                    let mgr = s2.manager.lock().await;
-                    mgr.list_peers().await.into_iter().for_each(|peer| {
-                        info!("Connected peer: {}", peer);
-                    });
-                }
 
                 // 1. 发送 NodeAnnouncement
                 if let Ok(signed) = SignedMessage::new_node_sign_message(s2.node.clone()) {
@@ -89,15 +83,9 @@ impl GossipService {
 
                 // 2. 发送 RepoAnnouncement（从本地 storage 加载 repo 列表）
                 if let Ok(repos) = crate::storage::repo_model::list_repos().await {
-                    let repo_ids: Vec<_> = repos
-                        .iter()
-                        .filter_map(|r| {
-                            crate::repo::repo_id::RepoId::parse_from_str(&r.repo_id).ok()
-                        })
-                        .collect();
-                    if !repo_ids.is_empty() {
+                    if !repos.is_empty() {
                         if let Ok(signed) =
-                            SignedMessage::new_repo_sign_message(repo_ids, s2.node.clone())
+                            SignedMessage::new_repo_sign_message(repos, s2.node.clone())
                         {
                             let env = Envelope {
                                 payload: signed,
@@ -187,17 +175,33 @@ impl GossipService {
                     na.alias,
                     na.addresses,
                 );
-                // TODO: update NodeManager or Node routing table
+
+                // 将节点信息保存到数据库
+                let node_info = NodeInfo {
+                    node_id: na.node_id.clone(),
+                    alias: na.alias.clone(),
+                    addresses: na.addresses.clone(),
+                    node_type: na.node_type.clone(),
+                    version: na.version,
+                };
+
+                if let Err(e) = node_model::save_node_info_to_db(&node_info).await {
+                    tracing::warn!("Failed to save node info to db: {}", e);
+                }
             }
             GossipMessage::RepoAnnouncement(ra) => {
                 tracing::info!(
                     "Gossip: RepoAnnouncement from {} with {} repos: {:?}",
                     ra.node_id,
                     ra.repos.len(),
-                    ra.repos.iter().map(|r| r.as_str()).collect::<Vec<_>>()
+                    ra.repos.iter().map(|r| &r.repo_id).collect::<Vec<_>>()
                 );
-                // 可选：记录该节点拥有的 repo 信息到本地数据库（用于搜索/发现）
-                // 这里可以保存到一个 peer_repos 表用于跟踪哪个节点有哪些 repo
+                // 将每个 repo 保存到数据库（带空路径表示远程 repo）
+                for repo in &ra.repos {
+                    if let Err(e) = crate::storage::repo_model::save_repo_to_db(repo).await {
+                        tracing::warn!("Failed to save remote repo {} to db: {}", &repo.repo_id, e);
+                    }
+                }
             }
         }
 

@@ -19,7 +19,6 @@ impl RepoManager {
     /// 注册仓库
     pub async fn register_repo(&mut self, repo: Repo) -> Result<(), String> {
         save_repo_to_db(&repo).await.map_err(|e| e.to_string())?;
-
         Ok(())
     }
 

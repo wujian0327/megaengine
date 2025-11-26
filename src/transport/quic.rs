@@ -9,9 +9,11 @@ use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{error, info};
 
+use std::time::Duration;
 use tokio::sync::mpsc::Sender as TokioSender;
 
 const READ_BUF_SIZE: usize = 1024 * 1024;
+const CONNECTION_CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
 
 // Type alias for incoming message sender to reduce type complexity
 type IncomingMessageSender = Arc<Mutex<Option<TokioSender<(NodeId, Vec<u8>)>>>>;
@@ -32,15 +34,6 @@ pub struct QuicConnection {
     pub peer_addr: SocketAddr,
     pub node_id: NodeId,
     pub connection_type: ConnectionType,
-    pub connection_state: ConnectionState,
-}
-
-#[derive(Debug, Clone)]
-pub enum ConnectionState {
-    Connecting,
-    Connected,
-    Disconnected,
-    Failed,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +74,8 @@ impl ConnectionManager {
         let connection_tx = manager.connection_tx.clone();
         let connections = Arc::clone(&manager.connections);
         let manager_clone = manager.clone();
+
+        manager.start_connection_cleanup();
 
         tokio::spawn(async move {
             while let Some(incoming) = endpoint.accept().await {
@@ -154,7 +149,6 @@ impl ConnectionManager {
                 peer_addr,
                 node_id,
                 connection_type: ConnectionType::Server,
-                connection_state: ConnectionState::Connected,
             },
             message_rx,
         ))
@@ -187,6 +181,32 @@ impl ConnectionManager {
     pub async fn list_peers(&self) -> Vec<NodeId> {
         let connections = self.connections.lock().await;
         connections.keys().cloned().collect()
+    }
+
+    /// Start background task to periodically clean up stale connections
+    pub fn start_connection_cleanup(&self) {
+        let connections = Arc::clone(&self.connections);
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(CONNECTION_CLEANUP_INTERVAL);
+            loop {
+                interval.tick().await;
+                let mut conns = connections.lock().await;
+                let mut dead_nodes = Vec::new();
+
+                for (node_id, conn) in conns.iter() {
+                    if conn.connection.close_reason().is_some() {
+                        info!("Connection to node[{}] closed", node_id);
+                        dead_nodes.push(node_id.clone());
+                    }
+                }
+
+                for node_id in dead_nodes {
+                    conns.remove(&node_id);
+                    info!("Cleaned up stale connection for node: {}", node_id);
+                }
+            }
+        });
     }
 
     pub async fn connect(
@@ -237,7 +257,6 @@ impl ConnectionManager {
             peer_addr,
             node_id: target_node_id.clone(),
             connection_type: ConnectionType::Client,
-            connection_state: ConnectionState::Connected,
         };
         let connections = Arc::clone(&self.connections);
         connections

@@ -6,6 +6,7 @@ MegaEngine is a distributed peer-to-peer (P2P) network for Git repositories. It 
 
 - **Decentralized Node Discovery**: Nodes automatically discover each other and exchange node information via gossip protocol
 - **Repository Synchronization**: Nodes announce and sync repository inventory across the network
+- **Repository Packing**: Pack Git repositories into bundle
 - **QUIC Transport**: Uses QUIC protocol for reliable, low-latency peer-to-peer communication
 - **Gossip Protocol**: Implements epidemic message propagation with TTL and deduplication
 - **Cryptographic Identity**: Each node has a unique EdDSA-based identity (`did:key` format)
@@ -46,7 +47,7 @@ MegaEngine is a distributed peer-to-peer (P2P) network for Git repositories. It 
 ### Prerequisites
 
 - Rust 1.70+ (2021 edition)
-- Git
+- Git (for git operations and bundle/tar packing)
 - OpenSSL development libraries (for TLS)
 
 ### Build
@@ -120,64 +121,10 @@ cargo run -- repo add \
 
 The repo ID is automatically generated from the Git root commit hash and the node's public key.
 
+
 ## 🧪 Testing
 
-Run the integration test for three-node gossip propagation:
 
-```bash
-cargo test --test gossip_three_nodes -- --nocapture --test-threads=1
-```
-
-This test:
-1. Starts three nodes with QUIC servers
-2. Connects them in a chain: node1 ↔ node2 ↔ node3
-3. Initiates gossip protocol on all nodes
-4. Sends NodeAnnouncement and RepoAnnouncement messages
-5. Verifies message propagation with TTL and deduplication
-
-Example output:
-```
-Gossip: NodeAnnouncement from did:key:z2DZe... (alias: node1)
-Gossip: RepoAnnouncement from did:key:z2DW... with 1 repos: ["did:repo:zW1i..."]
-```
-
-## 📁 Project Structure
-
-```
-src/
-├── main.rs                  # CLI entry point
-├── lib.rs                   # Library root
-├── identity/
-│   └── keypair.rs          # EdDSA keypair generation and signing
-├── node/
-│   ├── node.rs             # Node runtime with QUIC manager
-│   ├── node_id.rs          # Node identifier (did:key format)
-│   ├── node_manager.rs     # Node routing and lifecycle
-│   └── node.rs
-├── repo/
-│   ├── repo.rs             # Repository metadata and refs
-│   ├── repo_id.rs          # Repository identifier (did:repo format)
-│   └── repo_manager.rs     # Repository persistence and query
-├── storage/
-│   ├── mod.rs              # Database initialization and connection
-│   ├── repo_model.rs       # Sea-ORM models and CRUD for repos
-│   └── node_model.rs       # Sea-ORM models and CRUD for nodes
-├── transport/
-│   ├── quic.rs             # QUIC connection manager
-│   ├── config.rs           # QUIC configuration
-│   └── cert.rs             # TLS certificate generation
-├── gossip/
-│   ├── mod.rs              # Gossip service exports
-│   ├── message.rs          # Gossip message types and signing
-│   └── service.rs          # Gossip protocol implementation
-├── git/
-│   └── mod.rs              # Git repository utilities
-└── util/
-    └── mod.rs              # Timestamp and utility functions
-
-tests/
-└── gossip_three_nodes.rs    # Integration test for gossip relay
-```
 
 ## 🔐 Data Formats
 
