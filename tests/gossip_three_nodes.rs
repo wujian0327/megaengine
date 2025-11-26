@@ -2,6 +2,7 @@
 use megaengine::gossip::{GossipService, SignedMessage};
 use megaengine::identity::keypair::KeyPair;
 use megaengine::node::node::{Node, NodeType};
+use megaengine::storage::node_model;
 use megaengine::transport::config::QuicConfig;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -146,4 +147,12 @@ async fn test_gossip_three_nodes_message_relay() {
 
     // 这里只能通过日志人工观察传播效果，或后续扩展 GossipService 提供 hook/回调收集消息
     sleep(Duration::from_secs(1)).await;
+
+    // Cleanup: Remove nodes from database
+    let node_id_1 = node1.node_id().to_string();
+    let node_id_2 = node2.node_id().to_string();
+    let node_id_3 = node3.node_id().to_string();
+    let _ = node_model::delete_node_from_db(&node_id_1).await;
+    let _ = node_model::delete_node_from_db(&node_id_2).await;
+    let _ = node_model::delete_node_from_db(&node_id_3).await;
 }

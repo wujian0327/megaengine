@@ -83,6 +83,7 @@ impl SignedMessage {
             .into_iter()
             .map(|mut repo| {
                 repo.path = std::path::PathBuf::new();
+                repo.bundle = std::path::PathBuf::new();
                 repo
             })
             .collect();

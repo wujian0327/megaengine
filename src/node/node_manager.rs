@@ -70,6 +70,7 @@ mod tests {
     async fn test_node_manager_insert_node() {
         let mut manager = NodeManager::new();
         let node = create_sample_node();
+        let node_id = node.node_id().clone();
 
         // Insert the node
         manager.insert_node(&node).await;
@@ -79,12 +80,16 @@ mod tests {
         let node_routing = manager.get_node(&node.node_id());
         assert!(node_routing.is_some());
         assert_eq!(node_routing.unwrap().node_id, *node.node_id());
+
+        // Cleanup: Remove from database
+        let _ = crate::storage::node_model::delete_node_from_db(&node_id.to_string()).await;
     }
 
     #[tokio::test]
     async fn test_node_manager_mark_alive() {
         let mut manager = NodeManager::new();
         let node = create_sample_node();
+        let node_id = node.node_id().clone();
 
         // Insert the node
         manager.insert_node(&node).await;
@@ -98,12 +103,16 @@ mod tests {
         // Assert that the last_seen time was refreshed
         let refreshed_last_seen = manager.get_node(&node.node_id()).unwrap().last_seen;
         assert_ne!(initial_last_seen, refreshed_last_seen);
+
+        // Cleanup: Remove from database
+        let _ = crate::storage::node_model::delete_node_from_db(&node_id.to_string()).await;
     }
 
     #[tokio::test]
     async fn test_node_manager_cleanup_expired() {
         let mut manager = NodeManager::new();
         let node = create_sample_node();
+        let node_id = node.node_id().clone();
 
         manager.insert_node(&node).await;
         assert_eq!(manager.nodes.len(), 1);
@@ -112,6 +121,9 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_secs(2));
         manager.cleanup_expired();
         assert_eq!(manager.nodes.len(), 0);
+
+        // Cleanup: Remove from database
+        let _ = crate::storage::node_model::delete_node_from_db(&node_id.to_string()).await;
     }
 
     #[tokio::test]
@@ -119,6 +131,8 @@ mod tests {
         let mut manager = NodeManager::new();
         let node1 = create_sample_node();
         let node2 = create_sample_node();
+        let node_id_1 = node1.node_id().clone();
+        let node_id_2 = node2.node_id().clone();
 
         manager.insert_node(&node1).await;
         manager.insert_node(&node2).await;
@@ -126,5 +140,9 @@ mod tests {
         let _ = std::panic::catch_unwind(|| {
             manager.routing_print();
         });
+
+        // Cleanup: Remove from database
+        let _ = crate::storage::node_model::delete_node_from_db(&node_id_1.to_string()).await;
+        let _ = crate::storage::node_model::delete_node_from_db(&node_id_2.to_string()).await;
     }
 }

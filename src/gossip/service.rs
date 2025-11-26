@@ -165,7 +165,7 @@ impl GossipService {
         // process message (borrow the inner message to avoid moving)
         match &signed.message {
             GossipMessage::NodeAnnouncement(na) => {
-                tracing::debug!(
+                tracing::info!(
                     "Gossip: NodeAnnouncement from {} (alias: {}, addresses: {:?}, timestamp: {})",
                     na.node_id,
                     na.alias,
@@ -187,15 +187,25 @@ impl GossipService {
                 }
             }
             GossipMessage::RepoAnnouncement(ra) => {
-                tracing::debug!(
+                tracing::info!(
                     "Gossip: RepoAnnouncement from {} with {} repos: {:?}",
                     ra.node_id,
                     ra.repos.len(),
                     ra.repos.iter().map(|r| &r.repo_id).collect::<Vec<_>>()
                 );
-                // 将每个 repo 保存到数据库（带空路径表示远程 repo）
+                // 将每个 repo 保存到数据库
                 for repo in &ra.repos {
-                    if let Err(e) = crate::storage::repo_model::save_repo_to_db(repo).await {
+                    // 检查仓库是否已存在，如果存在则跳过
+                    if let Ok(Some(_)) =
+                        crate::storage::repo_model::load_repo_from_db(&repo.repo_id).await
+                    {
+                        tracing::debug!("Repo {} already exists, skipping", &repo.repo_id);
+                        continue;
+                    }
+
+                    let mut repo = repo.clone();
+                    repo.is_external = true;
+                    if let Err(e) = crate::storage::repo_model::save_repo_to_db(&repo).await {
                         tracing::warn!("Failed to save remote repo {} to db: {}", &repo.repo_id, e);
                     }
                 }

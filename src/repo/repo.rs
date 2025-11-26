@@ -18,6 +18,8 @@ pub struct Repo {
     pub refs: HashMap<String, String>,
     pub p2p_description: P2PDescription,
     pub path: PathBuf,
+    pub is_external: bool,
+    pub bundle: PathBuf,
 }
 
 impl Repo {
@@ -28,6 +30,8 @@ impl Repo {
             refs: HashMap::new(),
             p2p_description,
             path,
+            is_external: false,
+            bundle: PathBuf::new(),
         }
     }
 

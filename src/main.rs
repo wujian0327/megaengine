@@ -4,6 +4,7 @@ use megaengine::git::git_repo::{repo_name_space, repo_root_commit_bytes};
 use megaengine::git::pack::pack_repo_bundle;
 use megaengine::node::node_addr::NodeAddr;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use megaengine::gossip::GossipService;
 use megaengine::{
@@ -333,11 +334,7 @@ async fn main() -> Result<()> {
                     timestamp: timestamp_now(),
                 };
 
-                let repo = repo::repo::Repo::new(
-                    repo_id.to_string(),
-                    desc,
-                    std::path::PathBuf::from(path),
-                );
+                let repo = repo::repo::Repo::new(repo_id.to_string(), desc, PathBuf::from(path));
 
                 let mut manager = repo::repo_manager::RepoManager::new();
                 match manager.register_repo(repo).await {

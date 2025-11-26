@@ -92,6 +92,7 @@ mod tests {
     async fn test_repo_manager() -> Result<()> {
         let mut manager = RepoManager::new();
 
+        let repo_id = "did:repo:test";
         let desc = P2PDescription {
             creator: "did:key:test".to_string(),
             name: "test-repo".to_string(),
@@ -99,19 +100,18 @@ mod tests {
             timestamp: 1000,
         };
 
-        let repo = Repo::new(
-            "did:repo:test".to_string(),
-            desc,
-            PathBuf::from("/tmp/test-repo"),
-        );
+        let repo = Repo::new(repo_id.to_string(), desc, PathBuf::from("/tmp/test-repo"));
 
         let before = manager.repo_count().await?;
         assert!(manager.register_repo(repo).await.is_ok());
         let count = manager.repo_count().await?;
-        // 可能存在旧数据，确保数量不减少并且能通过 id 读取到刚注册的 repo
         assert!(count >= before);
-        let loaded = manager.get_repo("did:repo:test").await?;
+        let loaded = manager.get_repo(repo_id).await?;
         assert!(loaded.is_some());
+
+        // 清理测试数据
+        manager.remove_repo(repo_id).await?;
+
         Ok(())
     }
 
@@ -120,6 +120,7 @@ mod tests {
         // 持久化现在为默认行为
         let mut manager = RepoManager::new();
 
+        let repo_id = "did:repo:test-persist";
         let desc = P2PDescription {
             creator: "did:key:test".to_string(),
             name: "test-repo-persist".to_string(),
@@ -128,7 +129,7 @@ mod tests {
         };
 
         let repo = Repo::new(
-            "did:repo:test-persist".to_string(),
+            repo_id.to_string(),
             desc,
             PathBuf::from("/tmp/test-repo-persist"),
         );
@@ -139,11 +140,11 @@ mod tests {
         assert!(count >= before);
 
         // 删除仓库
-        let result = manager.remove_repo("did:repo:test-persist").await;
+        let result = manager.remove_repo(repo_id).await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_some());
         // 验证数据库中已删除该 repo
-        let loaded_after = manager.get_repo("did:repo:test-persist").await?;
+        let loaded_after = manager.get_repo(repo_id).await?;
         assert!(loaded_after.is_none());
 
         Ok(())
