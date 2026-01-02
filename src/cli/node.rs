@@ -170,10 +170,6 @@ pub async fn handle_node_id() -> Result<()> {
 
 pub async fn handle_node(
     root_path: String,
-    _alias: String,
-    _addr: String,
-    _cert_path: String,
-    _bootstrap_node: Option<String>,
     action: crate::NodeAction,
 ) -> Result<()> {
     match action {
