@@ -96,49 +96,54 @@ async fn print_repo_info(repo: &Repo) {
     println!("  Bundle:      {}", repo.bundle.display());
     println!("  Timestamp:   {}", repo.p2p_description.timestamp);
 
-    match megaengine::git::pack::extract_bundle_refs(&repo.bundle.to_string_lossy()) {
-        Ok(local_refs) => {
-            if local_refs.is_empty() {
-                println!("  Refs:        (none)");
-            } else {
-                println!("  Refs:        ({} total)", local_refs.len());
-                for (ref_name, commit) in &local_refs {
-                    println!("    - {}: {}", ref_name, commit);
+    if repo.bundle.as_os_str().is_empty() {
+        // No bundle path configured; avoid calling extract_bundle_refs on an empty path.
+        println!("  Refs:        (bundle path not set)");
+    } else {
+        match megaengine::git::pack::extract_bundle_refs(&repo.bundle.to_string_lossy()) {
+            Ok(local_refs) => {
+                if local_refs.is_empty() {
+                    println!("  Refs:        (none)");
+                } else {
+                    println!("  Refs:        ({} total)", local_refs.len());
+                    for (ref_name, commit) in &local_refs {
+                        println!("    - {}: {}", ref_name, commit);
+                    }
                 }
-            }
 
-            // Check for updates if this is a local repo
-            if !repo.path.as_os_str().is_empty() && repo.path.exists() {
-                match megaengine::git::git_repo::read_repo_refs(repo.path.to_str().unwrap_or("")) {
-                    Ok(current_refs) => {
-                        // Compare current refs with local refs
-                        if current_refs != local_refs {
-                            println!("  Status:      ⚠️  HAS UPDATES");
-                            println!("  Updated Refs: ({} total)", current_refs.len());
-                            for (ref_name, commit) in &current_refs {
-                                let local_commit = local_refs.get(ref_name);
-                                if local_commit != Some(commit) {
-                                    let indicator = if local_commit.is_none() {
-                                        "NEW"
-                                    } else {
-                                        "CHANGED"
-                                    };
-                                    println!("    - {} {} : {}", indicator, ref_name, commit);
+                // Check for updates if this is a local repo
+                if !repo.path.as_os_str().is_empty() && repo.path.exists() {
+                    match megaengine::git::git_repo::read_repo_refs(repo.path.to_str().unwrap_or("")) {
+                        Ok(current_refs) => {
+                            // Compare current refs with local refs
+                            if current_refs != local_refs {
+                                println!("  Status:      ⚠️  HAS UPDATES");
+                                println!("  Updated Refs: ({} total)", current_refs.len());
+                                for (ref_name, commit) in &current_refs {
+                                    let local_commit = local_refs.get(ref_name);
+                                    if local_commit != Some(commit) {
+                                        let indicator = if local_commit.is_none() {
+                                            "NEW"
+                                        } else {
+                                            "CHANGED"
+                                        };
+                                        println!("    - {} {} : {}", indicator, ref_name, commit);
+                                    }
                                 }
+                            } else {
+                                println!("  Status:      ✅ Up-to-date");
                             }
-                        } else {
-                            println!("  Status:      ✅ Up-to-date");
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to check for updates: {}", e);
+                            println!("  Status:      (failed to check: {})", e);
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!("Failed to check for updates: {}", e);
-                        println!("  Status:      (failed to check: {})", e);
-                    }
                 }
             }
-        }
-        Err(e) => {
-            println!("  Refs:        (failed to load: {})", e);
+            Err(e) => {
+                println!("  Refs:        (failed to load: {})", e);
+            }
         }
     }
 
