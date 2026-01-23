@@ -1,4 +1,5 @@
 use anyhow::Result;
+use megaengine::mcp::{start_mcp_server, start_sse_server};
 use megaengine::{
     bundle::BundleService, node::node_addr::NodeAddr, storage, transport::config::QuicConfig,
 };
@@ -11,6 +12,8 @@ pub async fn handle_node_start(
     addr: String,
     cert_path: String,
     bootstrap_node: Option<String>,
+    enable_mcp: bool,
+    mcp_sse_port: Option<u16>,
 ) -> Result<()> {
     tracing::info!("Starting node...");
     let cert_dir = format!("{}/{}", root_path, cert_path);
@@ -101,6 +104,28 @@ pub async fn handle_node_start(
     println!("Node address: {}", node_addr);
     println!("Press Ctrl+C to stop");
 
+    if enable_mcp {
+        tracing::info!("MCP server enabled, starting alongside node");
+        println!("MCP server is enabled");
+        std::thread::spawn(|| {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            if let Err(e) = rt.block_on(start_mcp_server()) {
+                tracing::error!("MCP server error: {}", e);
+            }
+        });
+    }
+
+    if let Some(port) = mcp_sse_port {
+        tracing::info!("MCP SSE server enabled on port {}", port);
+        println!("MCP SSE server enabled on port {}", port);
+        tokio::spawn(async move {
+            let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+            if let Err(e) = start_sse_server(addr).await {
+                tracing::error!("MCP SSE server error: {}", e);
+            }
+        });
+    }
+
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
@@ -175,7 +200,20 @@ pub async fn handle_node(root_path: String, action: crate::NodeAction) -> Result
             addr,
             cert_path,
             bootstrap_node,
-        } => handle_node_start(&root_path, alias, addr, cert_path, bootstrap_node).await,
+            mcp,
+            mcp_sse_port,
+        } => {
+            handle_node_start(
+                &root_path,
+                alias,
+                addr,
+                cert_path,
+                bootstrap_node,
+                mcp,
+                mcp_sse_port,
+            )
+            .await
+        }
         crate::NodeAction::Id => handle_node_id().await,
     }
 }

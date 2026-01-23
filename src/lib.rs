@@ -2,6 +2,7 @@ pub mod bundle;
 pub mod git;
 pub mod gossip;
 pub mod identity;
+pub mod mcp;
 pub mod node;
 pub mod repo;
 pub mod storage;
