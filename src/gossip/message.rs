@@ -200,7 +200,9 @@ mod tests {
             creator: "did:key:test".to_string(),
             name: "test-repo".to_string(),
             description: "A test repository".to_string(),
-            timestamp: 1000,
+            language: "Rust".to_string(),
+            latest_commit_at: 1000,
+            size: 0,
         };
 
         let repo = Repo::new(

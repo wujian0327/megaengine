@@ -37,11 +37,30 @@ pub async fn handle_repo_add(path: String, description: String) -> Result<()> {
     };
 
     let name = megaengine::git::git_repo::repo_name_space(&path);
+    let language = detect_language(&path);
+
+    // Calculate size: prefer .git directory size (repository data) over working tree size
+    let path_p = std::path::Path::new(&path);
+    let git_dir = path_p.join(".git");
+    let size = if git_dir.exists() {
+        calculate_directory_size(&git_dir)
+    } else {
+        0
+    };
+
+    // Try to get latest git commit time, fallback to now if failed (e.g. empty repo)
+    let latest_commit_at = match megaengine::git::git_repo::get_latest_commit_time(&path) {
+        Ok(t) => t,
+        Err(_) => timestamp_now(),
+    };
+
     let desc = repo::repo::P2PDescription {
         creator: node_id.to_string(),
         name: name.clone(),
         description: description.clone(),
-        timestamp: timestamp_now(),
+        language: language.clone(),
+        latest_commit_at,
+        size,
     };
 
     let mut repo_obj =
@@ -74,6 +93,115 @@ pub async fn handle_repo_add(path: String, description: String) -> Result<()> {
     Ok(())
 }
 
+fn detect_language(path: &str) -> String {
+    use std::collections::HashMap;
+    use std::fs;
+
+    let mut ext_counts: HashMap<String, usize> = HashMap::new();
+    let mut stack = vec![PathBuf::from(path)];
+    let mut files_scanned = 0;
+
+    while let Some(dir) = stack.pop() {
+        if files_scanned > 2000 {
+            break;
+        } // limit scanning
+
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if name.starts_with('.')
+                        || name == "target"
+                        || name == "node_modules"
+                        || name == "dist"
+                        || name == "build"
+                    {
+                        continue;
+                    }
+                    if stack.len() < 50 {
+                        stack.push(path);
+                    }
+                } else {
+                    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+                        *ext_counts.entry(ext.to_lowercase()).or_insert(0) += 1;
+                        files_scanned += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    let mut lang_stats = HashMap::new();
+    for (ext, count) in ext_counts {
+        let lang = match ext.as_str() {
+            "rs" => "Rust",
+            "go" => "Go",
+            "py" => "Python",
+            "js" => "JavaScript",
+            "ts" | "tsx" => "TypeScript",
+            "java" => "Java",
+            "c" | "h" => "C",
+            "cpp" | "hpp" | "cc" | "cxx" => "C++",
+            "cs" => "C#",
+            "rb" => "Ruby",
+            "php" => "PHP",
+            "html" => "HTML",
+            "css" | "scss" | "less" => "CSS",
+            "swift" => "Swift",
+            "kt" | "kts" => "Kotlin",
+            "scala" => "Scala",
+            "lua" => "Lua",
+            "sh" | "bash" | "zsh" => "Shell",
+            "sql" => "SQL",
+            "md" => "Markdown",
+            "json" | "yaml" | "yml" | "toml" | "xml" => "Config/Data",
+            _ => continue,
+        };
+        *lang_stats.entry(lang).or_insert(0) += count;
+    }
+
+    // 找出数量最多的语言，排除配置类
+    lang_stats
+        .into_iter()
+        .filter(|(l, _)| *l != "Config/Data" && *l != "Markdown")
+        .max_by_key(|&(_, count)| count)
+        .map(|(lang, _)| lang.to_string())
+        .unwrap_or_else(|| "Unknown".to_string())
+}
+
+fn calculate_directory_size(path: &std::path::Path) -> u64 {
+    use std::fs;
+    let mut size = 0;
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                size += fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+            } else if p.is_dir() {
+                size += calculate_directory_size(&p);
+            }
+        }
+    }
+    size
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
 pub async fn handle_repo_list() -> Result<()> {
     match storage::repo_model::list_repos().await {
         Ok(repos) => {
@@ -99,6 +227,20 @@ async fn print_repo_info(repo: &Repo) {
     println!("📦 Repo: {}", repo.p2p_description.name);
     println!("   ID:          {}", repo.repo_id);
     println!("   Creator:     {}", repo.p2p_description.creator);
+    println!("   Language:    {}", repo.p2p_description.language);
+    if repo.p2p_description.latest_commit_at > 0 {
+        if let Some(dt) = chrono::DateTime::from_timestamp(repo.p2p_description.latest_commit_at, 0)
+        {
+            let local = dt.with_timezone(&chrono::Local);
+            println!("   Updated:     {}", local.format("%Y-%m-%d %H:%M:%S"));
+        }
+    }
+    if repo.p2p_description.size > 0 {
+        println!(
+            "   Size:        {}",
+            format_bytes(repo.p2p_description.size)
+        );
+    }
     if !repo.p2p_description.description.is_empty() {
         println!("   Description: {}", repo.p2p_description.description);
     }

@@ -14,10 +14,12 @@ pub struct Model {
     pub name: String,
     pub creator: String,
     pub description: String,
-    pub timestamp: i64,
+    pub language: String,
     pub path: String,
     pub bundle: String,
     pub is_external: bool,
+    pub size: i64,
+    pub latest_commit_at: i64,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -42,10 +44,12 @@ pub async fn save_repo_to_db(repo: &Repo) -> Result<()> {
             name: Set(repo.p2p_description.name.clone()),
             creator: Set(repo.p2p_description.creator.clone()),
             description: Set(repo.p2p_description.description.clone()),
-            timestamp: Set(repo.p2p_description.timestamp),
+            language: Set(repo.p2p_description.language.clone()),
             path: Set(repo.path.to_string_lossy().to_string()),
             bundle: Set(repo.bundle.to_string_lossy().to_string()),
             is_external: Set(repo.is_external),
+            size: Set(repo.p2p_description.size as i64),
+            latest_commit_at: Set(repo.p2p_description.latest_commit_at),
             created_at: Unchanged(existing_model.created_at),
             updated_at: Set(now),
         };
@@ -57,10 +61,12 @@ pub async fn save_repo_to_db(repo: &Repo) -> Result<()> {
             name: Set(repo.p2p_description.name.clone()),
             creator: Set(repo.p2p_description.creator.clone()),
             description: Set(repo.p2p_description.description.clone()),
-            timestamp: Set(repo.p2p_description.timestamp),
+            language: Set(repo.p2p_description.language.clone()),
             path: Set(repo.path.to_string_lossy().to_string()),
             bundle: Set(repo.bundle.to_string_lossy().to_string()),
             is_external: Set(repo.is_external),
+            size: Set(repo.p2p_description.size as i64),
+            latest_commit_at: Set(repo.p2p_description.latest_commit_at),
             created_at: Set(now),
             updated_at: Set(now),
         };
@@ -89,7 +95,9 @@ pub async fn load_repo_from_db(repo_id: &str) -> Result<Option<Repo>> {
                 creator: model.creator,
                 name: model.name,
                 description: model.description,
-                timestamp: model.timestamp,
+                language: model.language,
+                latest_commit_at: model.latest_commit_at,
+                size: model.size as u64,
             },
             path: PathBuf::from(model.path),
             bundle: PathBuf::from(model.bundle),
@@ -127,7 +135,9 @@ pub async fn list_repos() -> Result<Vec<Repo>> {
                 creator: model.creator,
                 name: model.name,
                 description: model.description,
-                timestamp: model.timestamp,
+                language: model.language,
+                latest_commit_at: model.latest_commit_at,
+                size: model.size as u64,
             },
             path: PathBuf::from(model.path),
             bundle: PathBuf::from(model.bundle),
@@ -140,21 +150,22 @@ pub async fn list_repos() -> Result<Vec<Repo>> {
 /// 更新 Repo 的 bundle 路径
 pub async fn update_repo_bundle(repo_id: &str, bundle_path: &str) -> Result<()> {
     let db = init_db().await?;
-    let now = chrono::Local::now().timestamp();
 
     // 查询是否存在
     if let Some(model) = Entity::find_by_id(repo_id).one(&db).await? {
         let active_model = ActiveModel {
             id: Unchanged(model.id),
             bundle: Set(bundle_path.to_string()),
-            updated_at: Set(now),
+            updated_at: Unchanged(model.updated_at),
             // Keep other fields unchanged
             name: Unchanged(model.name),
             creator: Unchanged(model.creator),
             description: Unchanged(model.description),
-            timestamp: Unchanged(model.timestamp),
+            language: Unchanged(model.language),
             path: Unchanged(model.path),
             is_external: Unchanged(model.is_external),
+            size: Unchanged(model.size),
+            latest_commit_at: Unchanged(model.latest_commit_at),
             created_at: Unchanged(model.created_at),
         };
         Entity::update(active_model).exec(&db).await?;
@@ -174,7 +185,9 @@ mod tests {
             creator: "did:node:test333".to_string(),
             name: "test-repo".to_string(),
             description: "A test repository".to_string(),
-            timestamp: 1000,
+            language: "Rust".to_string(),
+            latest_commit_at: 1000,
+            size: 0,
         };
 
         let mut repo = Repo::new(
@@ -212,7 +225,9 @@ mod tests {
                 creator: "did:node:test".to_string(),
                 name: format!("test-repo-{}", i),
                 description: format!("Test repository {}", i),
-                timestamp: 1000 + i,
+                language: "Rust".to_string(),
+                latest_commit_at: 1000 + i,
+                size: 0,
             };
 
             let repo = Repo::new(

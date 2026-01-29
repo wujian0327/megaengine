@@ -78,3 +78,15 @@ pub fn read_repo_refs(path: &str) -> Result<std::collections::HashMap<String, St
 
     Ok(refs)
 }
+
+pub fn get_latest_commit_time(path: &str) -> Result<i64> {
+    let repo =
+        Repository::open(path).map_err(|e| anyhow::anyhow!("failed to open git repo: {}", e))?;
+    let head = repo
+        .head()
+        .map_err(|e| anyhow::anyhow!("failed to get HEAD: {}", e))?;
+    let commit = head
+        .peel_to_commit()
+        .map_err(|e| anyhow::anyhow!("failed to peel to commit: {}", e))?;
+    Ok(commit.time().seconds())
+}

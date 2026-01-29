@@ -8,7 +8,6 @@ use std::io::{self, BufRead, BufReader, Write};
 
 #[derive(Deserialize, Debug)]
 struct JsonRpcRequest {
-    jsonrpc: String,
     method: String,
     params: Option<Value>,
     id: Option<Value>,
@@ -120,7 +119,7 @@ impl RepoMcpServer {
                             "description": repo.p2p_description.description,
                             "path": repo.path.display().to_string(),
                             "bundle": repo.bundle.display().to_string(),
-                            "timestamp": repo.p2p_description.timestamp,
+                            "latest_commit_at": repo.p2p_description.latest_commit_at,
                         });
 
                         // 恢复 refs 处理逻辑
@@ -165,7 +164,7 @@ impl RepoMcpServer {
                     "description": repo.p2p_description.description,
                     "path": repo.path.display().to_string(),
                     "bundle": repo.bundle.display().to_string(),
-                    "timestamp": repo.p2p_description.timestamp,
+                    "latest_commit_at": repo.p2p_description.latest_commit_at,
                 });
 
                 // Check for updates if this is a local repo
