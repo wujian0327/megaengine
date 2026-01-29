@@ -417,4 +417,10 @@ async fn test_bundle_transfer_between_two_nodes() {
     let _ =
         megaengine::storage::node_model::delete_node_from_db(&receiver_node.node_id().to_string())
             .await;
+
+    // 清理生成的证书文件
+    let _ = std::fs::remove_file("cert/cert_sender.pem");
+    let _ = std::fs::remove_file("cert/key_sender.pem");
+    let _ = std::fs::remove_file("cert/cert_receiver.pem");
+    let _ = std::fs::remove_file("cert/key_receiver.pem");
 }
