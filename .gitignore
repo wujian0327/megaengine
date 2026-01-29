@@ -22,7 +22,7 @@ target
 
 .vscode/
 
-cert/
+# cert/
 .megaengine/
 tmp/*
 dist/
