@@ -60,7 +60,6 @@ pub struct SignedMessage {
     pub signature: String,
 }
 
-#[allow(dead_code)]
 impl SignedMessage {
     pub fn new_node_sign_message(node: Node) -> Result<Self> {
         let message = GossipMessage::NodeAnnouncement(node.clone().into());

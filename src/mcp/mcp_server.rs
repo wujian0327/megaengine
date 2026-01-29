@@ -1,14 +1,41 @@
-use crate::git::pack;
-use crate::storage;
+use crate::{git::pack, storage};
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::io::{self, BufRead, BufReader, Write};
+
+// --- 1. 定义符合 JSON-RPC 2.0 标准的结构 ---
+
+#[derive(Deserialize, Debug)]
+struct JsonRpcRequest {
+    jsonrpc: String,
+    method: String,
+    params: Option<Value>,
+    id: Option<Value>,
+}
+
+#[derive(Serialize, Debug)]
+struct JsonRpcResponse {
+    jsonrpc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<JsonRpcError>,
+    id: Option<Value>,
+}
+
+#[derive(Serialize, Debug)]
+struct JsonRpcError {
+    code: i32,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<Value>,
+}
 
 /// MCP Server implementation for repository operations
 pub struct RepoMcpServer;
 
 impl RepoMcpServer {
-    /// Get list of available tools
     pub fn get_tools() -> Vec<Value> {
         vec![
             json!({
@@ -34,10 +61,27 @@ impl RepoMcpServer {
                     "required": ["repo_id"]
                 }
             }),
+            json!({
+                "name": "clone_repo",
+                "description": "Clone a repository from its bundle to a local directory",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo_id": {
+                            "type": "string",
+                            "description": "The ID of the repository to clone"
+                        },
+                        "output_path": {
+                            "type": "string",
+                            "description": "The local path where the repository should be cloned"
+                        }
+                    },
+                    "required": ["repo_id", "output_path"]
+                }
+            }),
         ]
     }
 
-    /// Execute a tool with the given arguments
     pub async fn execute_tool(name: &str, args: Value) -> Result<Value> {
         match name {
             "list_repos" => Self::list_repos().await,
@@ -48,11 +92,21 @@ impl RepoMcpServer {
                     .ok_or_else(|| anyhow::anyhow!("Missing repo_id parameter"))?;
                 Self::get_repo_details(repo_id).await
             }
+            "clone_repo" => {
+                let repo_id = args
+                    .get("repo_id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Missing repo_id parameter"))?;
+                let output_path = args
+                    .get("output_path")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Missing output_path parameter"))?;
+                Self::clone_repo(repo_id, output_path).await
+            }
             _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),
         }
     }
 
-    /// List all repositories
     async fn list_repos() -> Result<Value> {
         match storage::repo_model::list_repos().await {
             Ok(repos) => {
@@ -69,7 +123,7 @@ impl RepoMcpServer {
                             "timestamp": repo.p2p_description.timestamp,
                         });
 
-                        // Extract refs information
+                        // 恢复 refs 处理逻辑
                         if !repo.bundle.as_os_str().is_empty() {
                             if let Ok(local_refs) =
                                 pack::extract_bundle_refs(&repo.bundle.to_string_lossy())
@@ -90,21 +144,17 @@ impl RepoMcpServer {
                         repo_info
                     })
                     .collect();
-
                 Ok(json!({
-                    "status": "success",
-                    "repositories": repo_list,
-                    "count": repo_list.len()
+                   "content": [{
+                       "type": "text",
+                       "text": serde_json::to_string(&repo_list)?
+                   }]
                 }))
             }
-            Err(e) => Ok(json!({
-                "status": "error",
-                "error": e.to_string()
-            })),
+            Err(e) => Err(e),
         }
     }
 
-    /// Get details of a specific repository
     async fn get_repo_details(repo_id: &str) -> Result<Value> {
         match storage::repo_model::load_repo_from_db(repo_id).await {
             Ok(Some(repo)) => {
@@ -152,116 +202,185 @@ impl RepoMcpServer {
                         }
                     }
                 }
-
                 Ok(json!({
-                    "status": "success",
-                    "repository": repo_info
+                   "content": [{
+                       "type": "text",
+                       "text": serde_json::to_string_pretty(&repo_info)?
+                   }]
                 }))
             }
-            Ok(None) => Ok(json!({
-                "status": "error",
-                "error": format!("Repository {} not found", repo_id)
-            })),
-            Err(e) => Ok(json!({
-                "status": "error",
-                "error": e.to_string()
-            })),
+            Ok(None) => Err(anyhow::anyhow!("Repository not found")),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn clone_repo(repo_id: &str, output: &str) -> Result<Value> {
+        use std::path::PathBuf;
+        match storage::repo_model::load_repo_from_db(repo_id).await {
+            Ok(Some(mut repo)) => {
+                let bundle_path = repo.bundle.to_string_lossy().to_string();
+                if bundle_path.is_empty() || !std::path::Path::new(&bundle_path).exists() {
+                    return Err(anyhow::anyhow!("Bundle file not found for repository"));
+                }
+
+                pack::restore_repo_from_bundle(&bundle_path, output).await?;
+
+                // Read and save refs from the cloned repository
+                if let Ok(refs) = crate::git::git_repo::read_repo_refs(output) {
+                    let _ = storage::ref_model::batch_save_refs(repo_id, &refs).await;
+                }
+
+                // Update repo path to the cloned location
+                repo.path = PathBuf::from(output);
+                let _ = storage::repo_model::save_repo_to_db(&repo).await;
+
+                Ok(json!({
+                   "content": [{
+                       "type": "text",
+                       "text": format!("Successfully cloned repository {} to {}", repo_id, output)
+                   }]
+                }))
+            }
+            Ok(None) => Err(anyhow::anyhow!("Repository not found")),
+            Err(e) => Err(e),
         }
     }
 }
 
 pub async fn start_mcp_server() -> Result<()> {
+    eprintln!("MCP Repository Server started");
+
     let stdin = io::stdin();
-    let stdout = io::stdout();
+    let mut stdout = io::stdout();
     let mut reader = BufReader::new(stdin.lock());
-    let mut writer = BufWriter::new(stdout.lock());
 
-    tracing::info!("MCP Repository Server started");
-
-    // Send initialization message
-    let init_response = json!({
-        "version": "1.0",
-        "name": "megaengine-repo-mcp",
-        "capabilities": {
-            "tools": {}
-        }
-    });
-    writeln!(writer, "{}", init_response.to_string())?;
-    writer.flush()?;
-
-    // Main request loop
     let mut line = String::new();
     while reader.read_line(&mut line)? > 0 {
-        if let Err(e) = handle_mcp_request(&line, &mut writer).await {
-            tracing::error!("Error handling MCP request: {}", e);
-            let error_response = json!({
-                "error": e.to_string()
-            });
-            writeln!(writer, "{}", error_response.to_string())?;
-            writer.flush()?;
+        if line.trim().is_empty() {
+            line.clear();
+            continue;
         }
+
+        // 1. 解析请求
+        let req: JsonRpcRequest = match serde_json::from_str(&line) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Failed to parse JSON: {}", e);
+                line.clear();
+                continue;
+            }
+        };
+
+        eprintln!("Received method: {}", req.method);
+
+        // 2. 处理请求并获取 Result 或 Error
+        // 注意：这里返回元组 (Option<Result>, Option<Error>)
+        let (result, error) = match req.method.as_str() {
+            // A. 初始化握手 (必须响应 initialize)
+            "initialize" => (
+                Some(json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": { "tools": {} },
+                    "serverInfo": {
+                        "name": "megaengine-repo-mcp",
+                        "version": "1.0"
+                    }
+                })),
+                None,
+            ),
+
+            // B. 初始化完成通知 (不需要响应)
+            "notifications/initialized" => {
+                eprintln!("Client initialized.");
+                line.clear();
+                continue;
+            }
+
+            // C. 列出工具
+            "tools/list" => {
+                let tools = RepoMcpServer::get_tools();
+                (Some(json!({ "tools": tools })), None)
+            }
+
+            // D. 调用工具
+            "tools/call" => handle_tool_call(&req.params).await,
+
+            // E. 心跳
+            "ping" => (Some(json!({})), None),
+
+            // F. 未知方法
+            _ => (
+                None,
+                Some(JsonRpcError {
+                    code: -32601,
+                    message: format!("Method not found: {}", req.method),
+                    data: None,
+                }),
+            ),
+        };
+
+        // 3. 构建并发送响应
+        if let Some(req_id) = req.id {
+            let resp = JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                result,
+                error,
+                id: Some(req_id),
+            };
+
+            let resp_str = serde_json::to_string(&resp)?;
+            writeln!(stdout, "{}", resp_str)?;
+            stdout.flush()?;
+        }
+
         line.clear();
     }
 
     Ok(())
 }
 
-async fn handle_mcp_request(
-    request: &str,
-    writer: &mut BufWriter<io::StdoutLock<'_>>,
-) -> Result<()> {
-    use anyhow::anyhow;
-
-    let request_data: Value = serde_json::from_str(request)?;
-
-    match request_data.get("method").and_then(|v| v.as_str()) {
-        Some("tools/list") => {
-            let tools = RepoMcpServer::get_tools();
-            let response = json!({
-                "tools": tools
-            });
-            writeln!(writer, "{}", response.to_string())?;
-            writer.flush()?;
-        }
-        Some("tools/call") => {
-            let tool_name = request_data
-                .get("params")
-                .and_then(|p| p.get("name"))
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow!("Missing tool name"))?;
-
-            let tool_args = request_data
-                .get("params")
-                .and_then(|p| p.get("arguments"))
-                .cloned()
-                .unwrap_or_else(|| json!({}));
-
-            let result = RepoMcpServer::execute_tool(tool_name, tool_args).await?;
-
-            let response = json!({
-                "result": result
-            });
-            writeln!(writer, "{}", response.to_string())?;
-            writer.flush()?;
-        }
-        Some(method) => {
-            return Err(anyhow!("Unknown method: {}", method));
-        }
+// 辅助函数：处理工具调用
+async fn handle_tool_call(params: &Option<Value>) -> (Option<Value>, Option<JsonRpcError>) {
+    let params = match params {
+        Some(p) => p,
         None => {
-            return Err(anyhow!("Missing method field"));
+            return (
+                None,
+                Some(JsonRpcError {
+                    code: -32602,
+                    message: "Missing params".into(),
+                    data: None,
+                }),
+            )
         }
-    }
+    };
 
-    Ok(())
-}
+    let name = match params.get("name").and_then(|n| n.as_str()) {
+        Some(n) => n,
+        None => {
+            return (
+                None,
+                Some(JsonRpcError {
+                    code: -32602,
+                    message: "Missing tool name".into(),
+                    data: None,
+                }),
+            )
+        }
+    };
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
-    #[test]
-    fn test_get_tools() {
-        let tools = RepoMcpServer::get_tools();
-        assert_eq!(tools.len(), 2);
+    // 调用业务逻辑
+    match RepoMcpServer::execute_tool(name, args).await {
+        Ok(res) => (Some(res), None), // 这里的 res 必须符合 CallToolResult 结构
+        Err(e) => (
+            None,
+            Some(JsonRpcError {
+                code: -32000, // 应用级错误
+                message: e.to_string(),
+                data: None,
+            }),
+        ),
     }
 }

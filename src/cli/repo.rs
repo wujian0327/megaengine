@@ -113,7 +113,9 @@ async fn print_repo_info(repo: &Repo) {
 
                 // Check for updates if this is a local repo
                 if !repo.path.as_os_str().is_empty() && repo.path.exists() {
-                    match megaengine::git::git_repo::read_repo_refs(repo.path.to_str().unwrap_or("")) {
+                    match megaengine::git::git_repo::read_repo_refs(
+                        repo.path.to_str().unwrap_or(""),
+                    ) {
                         Ok(current_refs) => {
                             // Compare current refs with local refs
                             if current_refs != local_refs {
@@ -198,11 +200,7 @@ pub async fn handle_repo_pull(repo_id: String) -> Result<()> {
                 }
             };
 
-            let result = pull_repo_from_bundle(
-                path_str,
-                bundle_str,
-                "master",
-            );
+            let result = pull_repo_from_bundle(path_str, bundle_str, "master");
 
             match result {
                 Ok(()) => {

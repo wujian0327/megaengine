@@ -31,7 +31,6 @@ pub struct ConnectionManager {
     endpoint: Arc<Endpoint>,
     connection_tx: mpsc::Sender<QuicConnection>,
     connections: Arc<Mutex<HashMap<NodeId, Arc<QuicConnection>>>>,
-    // 区分 Gossip 消息（控制流）和数据传输流
     gossip_sender: GossipMessageSender,
     data_sender: DataMessageSender,
 }
