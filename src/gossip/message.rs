@@ -106,7 +106,9 @@ impl SignedMessage {
 
     pub fn self_hash(&self) -> Vec<u8> {
         let mut hasher = Sha256::new();
-        let message_bytes = serde_json::to_vec(&self.message).unwrap_or_default();
+        // Canonicalize JSON serialization by converting to Value first (which sorts map keys)
+        let message_value = serde_json::to_value(&self.message).unwrap_or(serde_json::Value::Null);
+        let message_bytes = serde_json::to_vec(&message_value).unwrap_or_default();
 
         hasher.update(self.node_id.0.as_bytes());
         hasher.update(&message_bytes);

@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 
 mod cli;
 use cli::{handle_auth, handle_node, handle_repo};
+use megaengine::mcp::start_mcp_server;
 
 #[derive(Parser)]
 #[command(name = "megaengine")]
@@ -134,7 +135,7 @@ async fn main() -> Result<()> {
             handle_repo(action).await?;
         }
         Commands::Mcp => {
-            megaengine::mcp::start_mcp_server().await?;
+            start_mcp_server().await?;
         }
     }
 

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use git2::{Repository, Sort};
+use git2::{BranchType, Repository, Sort};
 
 pub fn repo_root_commit_bytes(path: &str) -> Result<Vec<u8>> {
     let repo =
@@ -48,12 +48,16 @@ pub fn read_repo_refs(path: &str) -> Result<std::collections::HashMap<String, St
         .map_err(|e| anyhow::anyhow!("failed to read branches: {}", e))?;
 
     for branch_result in branches {
-        let (branch, _) =
+        let (branch, branch_type) =
             branch_result.map_err(|e| anyhow::anyhow!("failed to read branch: {}", e))?;
         if let Ok(name) = branch.name() {
             if let Some(name) = name {
                 if let Some(oid) = branch.get().target() {
-                    refs.insert(format!("refs/heads/{}", name), oid.to_string());
+                    let ref_name = match branch_type {
+                        BranchType::Local => format!("refs/heads/{}", name),
+                        BranchType::Remote => format!("refs/remotes/{}", name),
+                    };
+                    refs.insert(ref_name, oid.to_string());
                 }
             }
         }

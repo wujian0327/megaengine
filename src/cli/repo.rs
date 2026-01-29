@@ -60,8 +60,16 @@ pub async fn handle_repo_add(path: String, description: String) -> Result<()> {
 
     let mut manager = repo::repo_manager::RepoManager::new();
     match manager.register_repo(repo_obj).await {
-        Ok(_) => tracing::info!("Repo {} added", repo_id),
-        Err(e) => tracing::info!("Failed to add repo: {}", e),
+        Ok(_) => {
+            tracing::info!("Repo {} added", repo_id);
+            println!("✅ Repository added successfully!");
+            println!("  ID:     {}", repo_id);
+            println!("  Name:   {}", name);
+        }
+        Err(e) => {
+            tracing::error!("Failed to add repo: {}", e);
+            eprintln!("❌ Failed to add repository: {}", e);
+        }
     }
     Ok(())
 }
@@ -70,10 +78,10 @@ pub async fn handle_repo_list() -> Result<()> {
     match storage::repo_model::list_repos().await {
         Ok(repos) => {
             if repos.is_empty() {
-                println!("No repositories found");
+                println!("No repositories found.");
             } else {
-                println!("Repositories:");
-                println!("{}", "─".repeat(120));
+                println!("Found {} repositories:", repos.len());
+                println!("{}", "─".repeat(60));
                 for repo in repos {
                     print_repo_info(&repo).await;
                 }
@@ -81,105 +89,99 @@ pub async fn handle_repo_list() -> Result<()> {
         }
         Err(e) => {
             tracing::error!("Failed to list repos: {}", e);
-            println!("Failed to list repositories: {}", e);
+            eprintln!("❌ Failed to list repositories: {}", e);
         }
     }
     Ok(())
 }
 
 async fn print_repo_info(repo: &Repo) {
-    println!("  ID:          {}", repo.repo_id);
-    println!("  Name:        {}", repo.p2p_description.name);
-    println!("  Creator:     {}", repo.p2p_description.creator);
-    println!("  Description: {}", repo.p2p_description.description);
-    println!("  Path:        {}", repo.path.display());
-    println!("  Bundle:      {}", repo.bundle.display());
-    println!("  Timestamp:   {}", repo.p2p_description.timestamp);
+    println!("📦 Repo: {}", repo.p2p_description.name);
+    println!("   ID:          {}", repo.repo_id);
+    println!("   Creator:     {}", repo.p2p_description.creator);
+    if !repo.p2p_description.description.is_empty() {
+        println!("   Description: {}", repo.p2p_description.description);
+    }
+    println!("   Path:        {}", repo.path.display());
+    // Bundle path only shown if it exists, to reduce clutter
+    if !repo.bundle.as_os_str().is_empty() {
+        println!("   Bundle:      {}", repo.bundle.display());
+    }
 
+    // Status check logic...
     if repo.bundle.as_os_str().is_empty() {
-        // No bundle path configured; avoid calling extract_bundle_refs on an empty path.
-        println!("  Refs:        (bundle path not set)");
+        println!("   Refs:        (bundle not set)");
     } else {
         match megaengine::git::pack::extract_bundle_refs(&repo.bundle.to_string_lossy()) {
             Ok(local_refs) => {
-                if local_refs.is_empty() {
-                    println!("  Refs:        (none)");
-                } else {
-                    println!("  Refs:        ({} total)", local_refs.len());
-                    for (ref_name, commit) in &local_refs {
-                        println!("    - {}: {}", ref_name, commit);
-                    }
-                }
+                let ref_count = local_refs.len();
 
-                // Check for updates if this is a local repo
+                // Check if up-to-date with local path
+                let mut status_msg = "✅ Synced".to_string();
+                let mut updates = Vec::new();
+
                 if !repo.path.as_os_str().is_empty() && repo.path.exists() {
                     match megaengine::git::git_repo::read_repo_refs(
                         repo.path.to_str().unwrap_or(""),
                     ) {
                         Ok(current_refs) => {
-                            // Compare current refs with local refs
                             if current_refs != local_refs {
-                                println!("  Status:      ⚠️  HAS UPDATES");
-                                println!("  Updated Refs: ({} total)", current_refs.len());
+                                status_msg = "⚠️  Out of Sync".to_string();
                                 for (ref_name, commit) in &current_refs {
-                                    let local_commit = local_refs.get(ref_name);
-                                    if local_commit != Some(commit) {
-                                        let indicator = if local_commit.is_none() {
-                                            "NEW"
-                                        } else {
-                                            "CHANGED"
-                                        };
-                                        println!("    - {} {} : {}", indicator, ref_name, commit);
+                                    if local_refs.get(ref_name) != Some(commit) {
+                                        updates.push(format!("{} -> {}", ref_name, &commit[0..7]));
                                     }
                                 }
-                            } else {
-                                println!("  Status:      ✅ Up-to-date");
                             }
                         }
-                        Err(e) => {
-                            tracing::warn!("Failed to check for updates: {}", e);
-                            println!("  Status:      (failed to check: {})", e);
-                        }
+                        Err(_) => status_msg = "❓ Unknown (Check Failed)".to_string(),
+                    }
+                }
+
+                println!("   Refs:        {} branches/tags", ref_count);
+                println!("   Status:      {}", status_msg);
+
+                if !updates.is_empty() {
+                    println!("   Updates:     {} pending changes", updates.len());
+                    for update in updates.iter().take(3) {
+                        println!("     - {}", update);
+                    }
+                    if updates.len() > 3 {
+                        println!("     - ... and {} more", updates.len() - 3);
                     }
                 }
             }
-            Err(e) => {
-                println!("  Refs:        (failed to load: {})", e);
-            }
+            Err(_) => println!("   Refs:        (error loading bundle)"),
         }
     }
 
-    println!("{}", "─".repeat(120));
+    println!("{}", "─".repeat(60));
 }
 
 pub async fn handle_repo_pull(repo_id: String) -> Result<()> {
+    println!("🔄 Pulling repository {}...", repo_id);
     match storage::repo_model::load_repo_from_db(&repo_id).await {
         Ok(Some(repo)) => {
             // Check if repo has a local path
             if repo.path.as_os_str().is_empty() {
                 tracing::error!("Repository {} has no local path", repo_id);
-                println!("Error: Repository {} has no local path", repo_id);
+                eprintln!(
+                    "❌ Error: Repository {} has no local path configured.",
+                    repo_id
+                );
                 return Ok(());
             }
             // Check if bundle exists
             if repo.bundle.as_os_str().is_empty() {
                 tracing::error!("Repository {} has no bundle available", repo_id);
-                println!("Error: Repository {} has no bundle available", repo_id);
+                eprintln!("❌ Error: Repository {} has no bundle available.", repo_id);
                 return Ok(());
             }
 
             let path_str = match repo.path.as_os_str().to_str() {
                 Some(s) => s,
                 None => {
-                    tracing::error!(
-                        "Repository {} has a local path that is not valid UTF-8: {}",
-                        repo_id,
-                        repo.path.display()
-                    );
-                    println!(
-                        "Error: Repository {} has a local path that is not valid UTF-8",
-                        repo_id
-                    );
+                    eprintln!("❌ Error: Local path is not valid UTF-8.");
                     return Ok(());
                 }
             };
@@ -187,15 +189,7 @@ pub async fn handle_repo_pull(repo_id: String) -> Result<()> {
             let bundle_str = match repo.bundle.as_os_str().to_str() {
                 Some(s) => s,
                 None => {
-                    tracing::error!(
-                        "Repository {} has a bundle path that is not valid UTF-8: {}",
-                        repo_id,
-                        repo.bundle.display()
-                    );
-                    println!(
-                        "Error: Repository {} has a bundle path that is not valid UTF-8",
-                        repo_id
-                    );
+                    eprintln!("❌ Error: Bundle path is not valid UTF-8.");
                     return Ok(());
                 }
             };
@@ -206,41 +200,42 @@ pub async fn handle_repo_pull(repo_id: String) -> Result<()> {
                 Ok(()) => {
                     tracing::info!("Repository {} fetched successfully from bundle", repo_id);
                     println!("✅ Repository updated successfully!");
-                    println!("  Repository: {}", repo.p2p_description.name);
-                    println!("  Path: {}", repo.path.display());
+                    println!("   Name: {}", repo.p2p_description.name);
+                    println!("   Path: {}", repo.path.display());
                 }
                 Err(e) => {
                     tracing::error!("Failed to spawn fetch task: {}", e);
-                    println!("Error: Failed to spawn fetch task: {}", e);
+                    eprintln!("❌ Failed to update repository: {}", e);
                 }
             }
         }
         Ok(None) => {
             tracing::error!("Repository {} not found in database", repo_id);
-            println!("Error: Repository {} not found", repo_id);
+            eprintln!("❌ Error: Repository {} not found.", repo_id);
         }
         Err(e) => {
             tracing::error!("Failed to query repository {}: {}", repo_id, e);
-            println!("Error: Failed to query repository: {}", e);
+            eprintln!("❌ Database error: {}", e);
         }
     }
     Ok(())
 }
 
 pub async fn handle_repo_clone(output: String, repo_id: String) -> Result<()> {
+    println!("📥 Cloning repository {}...", repo_id);
     match storage::repo_model::load_repo_from_db(&repo_id).await {
         Ok(Some(mut repo)) => {
             // Check if bundle exists
             if repo.bundle.as_os_str().is_empty() || repo.bundle.to_string_lossy().is_empty() {
                 tracing::error!("Repository {} has no bundle available for cloning", repo_id);
-                println!("Error: Repository {} has no bundle available", repo_id);
+                eprintln!("❌ Error: Repository {} has no bundle available.", repo_id);
                 return Ok(());
             }
 
             let bundle_path = repo.bundle.to_string_lossy().to_string();
             if !std::path::Path::new(&bundle_path).exists() {
                 tracing::error!("Bundle file not found at path: {}", bundle_path);
-                println!("Error: Bundle file not found at {}", bundle_path);
+                eprintln!("❌ Error: Bundle file not found at {}", bundle_path);
                 return Ok(());
             }
 
@@ -254,10 +249,11 @@ pub async fn handle_repo_clone(output: String, repo_id: String) -> Result<()> {
             match restore_repo_from_bundle(&bundle_path, &output).await {
                 Ok(_) => {
                     tracing::info!("Repository {} cloned successfully to {}", repo_id, output);
-                    println!("✅ Repository cloned successfully to {}", output);
-                    println!("  Repository: {}", repo.p2p_description.name);
-                    println!("  Creator: {}", repo.p2p_description.creator);
-                    println!("  Description: {}", repo.p2p_description.description);
+                    println!("✅ Repository cloned successfully!");
+                    println!("   Name:        {}", repo.p2p_description.name);
+                    println!("   Creator:     {}", repo.p2p_description.creator);
+                    println!("   Description: {}", repo.p2p_description.description);
+                    println!("   Path:        {}", output);
 
                     // Read and save refs from the cloned repository
                     match megaengine::git::git_repo::read_repo_refs(&output) {
@@ -266,11 +262,10 @@ pub async fn handle_repo_clone(output: String, repo_id: String) -> Result<()> {
                             // Save refs to the database
                             match storage::ref_model::batch_save_refs(&repo_id, &refs).await {
                                 Ok(_) => {
-                                    tracing::info!(
-                                        "Refs saved to database for repository {}",
-                                        repo_id
+                                    println!(
+                                        "   Refs:        {} branches/tags imported",
+                                        refs.len()
                                     );
-                                    println!("  Refs: {} branches/tags", refs.len());
                                 }
                                 Err(e) => {
                                     tracing::warn!("Failed to save refs to database: {}", e);
@@ -279,19 +274,14 @@ pub async fn handle_repo_clone(output: String, repo_id: String) -> Result<()> {
                         }
                         Err(e) => {
                             tracing::warn!("Failed to read refs from cloned repository: {}", e);
+                            println!("   ⚠️ Warning: Failed to read refs from cloned repo: {}", e);
                         }
                     }
 
                     // Update repo path to the cloned location
                     repo.path = PathBuf::from(&output);
                     match storage::repo_model::save_repo_to_db(&repo).await {
-                        Ok(_) => {
-                            tracing::info!(
-                                "Updated repo path to {} for repository {}",
-                                output,
-                                repo_id
-                            );
-                        }
+                        Ok(_) => {}
                         Err(e) => {
                             tracing::warn!("Failed to update repo path to database: {}", e);
                         }
@@ -299,17 +289,17 @@ pub async fn handle_repo_clone(output: String, repo_id: String) -> Result<()> {
                 }
                 Err(e) => {
                     tracing::error!("Failed to clone repository: {}", e);
-                    println!("Error: Failed to clone repository: {}", e);
+                    eprintln!("❌ Failed to clone repository: {}", e);
                 }
             }
         }
         Ok(None) => {
             tracing::error!("Repository {} not found in database", repo_id);
-            println!("Error: Repository {} not found", repo_id);
+            eprintln!("❌ Error: Repository {} not found.", repo_id);
         }
         Err(e) => {
             tracing::error!("Failed to query repository {}: {}", repo_id, e);
-            println!("Error: Failed to query repository: {}", e);
+            eprintln!("❌ Database error: {}", e);
         }
     }
     Ok(())

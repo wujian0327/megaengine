@@ -277,9 +277,11 @@ impl GossipService {
 
                             // 有新的 refs 更新，清空 bundle 等待重新同步
                             tracing::info!(
-                                "Detected ref updates for repo {} from node {}",
+                                "Detected ref updates for repo {} from node {}. local refs: {:?}, remote refs: {:?}",
                                 &repo.repo_id,
-                                ra.node_id
+                                ra.node_id,
+                                local_refs,
+                                repo.refs
                             );
 
                             // 删除旧的 bundle 文件
