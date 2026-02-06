@@ -121,6 +121,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let root_path = resolve_root_path(&cli.root)?;
+    let root_path = resolve_root_path(&cli.root)?;
 
     match cli.command {
         Commands::Auth { action } => match action {
