@@ -19,6 +19,33 @@ pub enum GossipMessage {
     NodeAnnouncement(NodeAnnouncement),
     /// 仓库公告 (库存公告)
     RepoAnnouncement(RepoAnnouncement),
+    /// P2P 聊天消息
+    Chat(EncryptedChatMessage),
+    /// 聊天消息送达确认
+    ChatAck(ChatAckMessage),
+}
+
+/// 聊天消息 (加密)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EncryptedChatMessage {
+    /// 真正的发送者
+    pub sender_id: NodeId,
+    /// 目标接收者
+    pub receiver_id: NodeId,
+    /// 消息 ID (用于去重)
+    pub msg_id: String,
+    /// 密文数据 (包含 ephemeral public key)
+    pub ciphertext: Vec<u8>,
+}
+
+/// 聊天回执
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatAckMessage {
+    pub sender_id: NodeId,
+    pub target_id: NodeId,
+    pub msg_id: String,
+    pub timestamp: i64,
+    pub signature: String,
 }
 
 /// 节点公告
@@ -29,6 +56,12 @@ pub struct NodeAnnouncement {
     pub alias: String,
     pub node_type: NodeType,
     pub addresses: Vec<SocketAddr>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Envelope {
+    pub payload: SignedMessage,
+    pub ttl: u8,
 }
 
 impl From<Node> for NodeAnnouncement {
@@ -133,6 +166,8 @@ impl GossipMessage {
         match self {
             GossipMessage::NodeAnnouncement(_) => "node_announcement",
             GossipMessage::RepoAnnouncement(_) => "inventory_announcement",
+            GossipMessage::Chat(_) => "chat",
+            GossipMessage::ChatAck(_ack) => "chat_ack",
         }
     }
 
@@ -141,6 +176,8 @@ impl GossipMessage {
         match self {
             GossipMessage::NodeAnnouncement(na) => &na.node_id,
             GossipMessage::RepoAnnouncement(ra) => &ra.node_id,
+            GossipMessage::Chat(c) => &c.sender_id,
+            GossipMessage::ChatAck(ack) => &ack.sender_id,
         }
     }
 }

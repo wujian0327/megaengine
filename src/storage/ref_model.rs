@@ -2,7 +2,7 @@ use anyhow::Result;
 use sea_orm::entity::prelude::*;
 use sea_orm::{Set, Unchanged};
 
-use crate::storage::init_db;
+use crate::storage::get_db_conn;
 
 /// Refs table entity for tracking branch and tag commits
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
@@ -23,7 +23,7 @@ impl ActiveModelBehavior for ActiveModel {}
 
 /// Save or update a ref in the database
 pub async fn save_ref(repo_id: &str, ref_name: &str, commit_hash: &str) -> Result<()> {
-    let db = init_db().await?;
+    let db = get_db_conn().await?;
     let now = chrono::Local::now().timestamp();
 
     // Generate a unique ID for this ref record (repo_id + ref_name)
@@ -62,7 +62,7 @@ pub async fn batch_save_refs(
     repo_id: &str,
     refs: &std::collections::HashMap<String, String>,
 ) -> Result<()> {
-    let db = init_db().await?;
+    let db = get_db_conn().await?;
     let now = chrono::Local::now().timestamp();
 
     for (ref_name, commit_hash) in refs {
@@ -98,7 +98,7 @@ pub async fn batch_save_refs(
 pub async fn load_refs_for_repo(
     repo_id: &str,
 ) -> Result<std::collections::HashMap<String, String>> {
-    let db = init_db().await?;
+    let db = get_db_conn().await?;
 
     let refs = Entity::find()
         .filter(Column::RepoId.eq(repo_id))
@@ -115,7 +115,7 @@ pub async fn load_refs_for_repo(
 
 /// Get a specific ref by repo_id and ref_name
 pub async fn get_ref(repo_id: &str, ref_name: &str) -> Result<Option<String>> {
-    let db = init_db().await?;
+    let db = get_db_conn().await?;
     let id = format!("{}:{}", repo_id, ref_name);
 
     if let Some(model) = Entity::find_by_id(id).one(&db).await? {
@@ -127,7 +127,7 @@ pub async fn get_ref(repo_id: &str, ref_name: &str) -> Result<Option<String>> {
 
 /// Delete all refs for a repository
 pub async fn delete_refs_for_repo(repo_id: &str) -> Result<()> {
-    let db = init_db().await?;
+    let db = get_db_conn().await?;
     Entity::delete_many()
         .filter(Column::RepoId.eq(repo_id))
         .exec(&db)
@@ -137,7 +137,7 @@ pub async fn delete_refs_for_repo(repo_id: &str) -> Result<()> {
 
 /// Delete a specific ref
 pub async fn delete_ref(repo_id: &str, ref_name: &str) -> Result<()> {
-    let db = init_db().await?;
+    let db = get_db_conn().await?;
     let id = format!("{}:{}", repo_id, ref_name);
     Entity::delete_by_id(id).exec(&db).await?;
     Ok(())
@@ -148,7 +148,7 @@ pub async fn has_refs_changed(
     repo_id: &str,
     old_refs: &std::collections::HashMap<String, String>,
 ) -> Result<bool> {
-    let db = init_db().await?;
+    let db = get_db_conn().await?;
 
     let current_refs = Entity::find()
         .filter(Column::RepoId.eq(repo_id))

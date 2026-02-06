@@ -1,3 +1,4 @@
+pub mod chat_message;
 pub mod node_model;
 pub mod ref_model;
 pub mod repo_model;
@@ -75,90 +76,114 @@ pub fn db_path() -> PathBuf {
 }
 
 /// 初始化数据库连接并创建表
-pub async fn init_db() -> Result<DatabaseConnection> {
-    static DB: OnceCell<DatabaseConnection> = OnceCell::const_new();
+pub async fn get_db_conn() -> Result<DatabaseConnection> {
+    use std::collections::HashMap;
+    use tokio::sync::Mutex;
 
-    // 如果已经初始化，直接返回 clone
-    if let Some(db) = DB.get() {
-        return Ok(db.clone());
+    static DB_POOL: OnceCell<Mutex<HashMap<PathBuf, DatabaseConnection>>> = OnceCell::const_new();
+
+    let pool = DB_POOL
+        .get_or_init(|| async { Mutex::new(HashMap::new()) })
+        .await;
+
+    let path = db_path();
+
+    {
+        let map = pool.lock().await;
+        if let Some(db) = map.get(&path) {
+            return Ok(db.clone());
+        }
     }
 
     // 延迟初始化并缓存全局连接（仅第一次会执行创建表操作）
-    let db_conn = DB
-        .get_or_init(|| async {
-            let db_path = db_path();
+    let db_path = path.clone();
 
-            // 确保目录存在
-            if let Some(parent) = db_path.parent() {
-                fs::create_dir_all(parent).ok();
-            }
+    // 确保目录存在
+    if let Some(parent) = db_path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
 
-            // 使用合适的 SQLite URL 格式
-            let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
+    // 使用合适的 SQLite URL 格式
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
 
-            let mut opt = ConnectOptions::new(db_url);
-            opt.max_connections(5)
-                .min_connections(1)
-                .connect_timeout(Duration::from_secs(8));
+    let mut opt = ConnectOptions::new(db_url);
+    opt.max_connections(100)
+        .min_connections(1)
+        .connect_timeout(Duration::from_secs(8))
+        .idle_timeout(Duration::from_secs(8))
+        .sqlx_logging(false);
 
-            let db = Database::connect(opt)
-                .await
-                .expect("failed to connect to db");
+    let db = Database::connect(opt).await?;
 
-            // 运行迁移或创建表（只在初始化时执行）
-            let _ = db
-                .execute_unprepared(
-                    "CREATE TABLE IF NOT EXISTS repos (
-                        id TEXT PRIMARY KEY,
-                        name TEXT NOT NULL,
-                        creator TEXT NOT NULL,
-                        description TEXT NOT NULL,
-                        language TEXT NOT NULL DEFAULT '',
-                        size INTEGER NOT NULL DEFAULT 0,
-                        latest_commit_at INTEGER NOT NULL DEFAULT 0,
-                        path TEXT NOT NULL,
-                        bundle TEXT NOT NULL DEFAULT '',
-                        is_external INTEGER NOT NULL DEFAULT 0,
-                        created_at INTEGER NOT NULL,
-                        updated_at INTEGER NOT NULL
-                    )",
-                )
-                .await;
-
-            // 节点表
-            let _ = db
-                .execute_unprepared(
-                    "CREATE TABLE IF NOT EXISTS nodes (
-                        id TEXT PRIMARY KEY,
-                        alias TEXT NOT NULL,
-                        addresses TEXT NOT NULL,
-                        node_type INTEGER NOT NULL,
-                        version INTEGER NOT NULL,
-                        created_at INTEGER NOT NULL,
-                        updated_at INTEGER NOT NULL
-                    )",
-                )
-                .await;
-
-            // Refs 表：存储分支和标签的最新 commit
-            let _ = db
-                .execute_unprepared(
-                    "CREATE TABLE IF NOT EXISTS refs (
-                        id TEXT PRIMARY KEY,
-                        repo_id TEXT NOT NULL,
-                        ref_name TEXT NOT NULL,
-                        commit_hash TEXT NOT NULL,
-                        updated_at INTEGER NOT NULL,
-                        UNIQUE(repo_id, ref_name) ON CONFLICT REPLACE
-                    )",
-                )
-                .await;
-
-            db
-        })
+    // 运行迁移或创建表（只在初始化时执行）
+    let _ = db
+        .execute_unprepared(
+            "CREATE TABLE IF NOT EXISTS repos (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            creator TEXT NOT NULL,
+            description TEXT NOT NULL,
+            language TEXT NOT NULL DEFAULT '',
+            size INTEGER NOT NULL DEFAULT 0,
+            latest_commit_at INTEGER NOT NULL DEFAULT 0,
+            path TEXT NOT NULL,
+            bundle TEXT NOT NULL DEFAULT '',
+            is_external INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )",
+        )
         .await;
 
-    Ok(db_conn.clone())
+    // 节点表
+    let _ = db
+        .execute_unprepared(
+            "CREATE TABLE IF NOT EXISTS nodes (
+            id TEXT PRIMARY KEY,
+            alias TEXT NOT NULL,
+            addresses TEXT NOT NULL,
+            node_type INTEGER NOT NULL,
+            version INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )",
+        )
+        .await;
+
+    // Refs 表
+    let _ = db
+        .execute_unprepared(
+            "CREATE TABLE IF NOT EXISTS refs (
+            repo_id TEXT NOT NULL,
+            ref_name TEXT NOT NULL,
+            commit_hash TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            PRIMARY KEY (repo_id, ref_name)
+        )",
+        )
+        .await;
+
+    // Chat Messages 表
+    let _ = db
+        .execute_unprepared(
+            "CREATE TABLE IF NOT EXISTS chat_messages (
+            id TEXT PRIMARY KEY,
+            \"from\" TEXT NOT NULL,
+            \"to\" TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            status TEXT NOT NULL
+        )",
+        )
+        .await;
+
+    {
+        let mut map = pool.lock().await;
+        map.insert(path, db.clone());
+    }
+
+    Ok(db)
 }
 
 /// 保存密钥对到文件（JSON）
