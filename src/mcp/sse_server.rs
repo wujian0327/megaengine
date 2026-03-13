@@ -6,6 +6,7 @@ use axum::{
         IntoResponse,
     },
     routing::{get, post},
+    http::Method,
     Json, Router,
 };
 use futures::stream::Stream;
@@ -13,7 +14,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::sync::{mpsc, RwLock};
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
 // App state to hold active sessions
@@ -56,10 +57,16 @@ pub async fn start_sse_server(addr: SocketAddr) -> anyhow::Result<()> {
         sessions: RwLock::new(HashMap::new()),
     });
 
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers(Any);
+
     let app = Router::new()
         .route("/sse", get(sse_handler))
         .route("/messages", post(message_handler))
-        .with_state(state);
+        .with_state(state)
+        .layer(cors);
 
     tracing::info!("MCP SSE Server listening on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;

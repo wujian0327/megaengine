@@ -137,11 +137,33 @@ impl SignedMessage {
         Ok(sign_message)
     }
 
+    fn canonicalize_value(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                // Sort object keys to obtain a deterministic representation.
+                let mut entries: Vec<(String, serde_json::Value)> = map.into_iter().collect();
+                entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+                let mut new_map = serde_json::Map::new();
+                for (k, v) in entries {
+                    new_map.insert(k, Self::canonicalize_value(v));
+                }
+                serde_json::Value::Object(new_map)
+            }
+            serde_json::Value::Array(vec) => {
+                serde_json::Value::Array(vec.into_iter().map(Self::canonicalize_value).collect())
+            }
+            other => other,
+        }
+    }
+
     pub fn self_hash(&self) -> Vec<u8> {
         let mut hasher = Sha256::new();
-        // Canonicalize JSON serialization by converting to Value first (which sorts map keys)
-        let message_value = serde_json::to_value(&self.message).unwrap_or(serde_json::Value::Null);
-        let message_bytes = serde_json::to_vec(&message_value).unwrap_or_default();
+        // Canonicalize JSON by recursively sorting object keys before serialization.
+        let message_value =
+            serde_json::to_value(&self.message).unwrap_or(serde_json::Value::Null);
+        let canonical_value = Self::canonicalize_value(message_value);
+        let message_bytes = serde_json::to_vec(&canonical_value).unwrap_or_default();
 
         hasher.update(self.node_id.0.as_bytes());
         hasher.update(&message_bytes);

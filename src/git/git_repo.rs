@@ -42,20 +42,17 @@ pub fn read_repo_refs(path: &str) -> Result<std::collections::HashMap<String, St
 
     let mut refs = std::collections::HashMap::new();
 
-    // Read branches (refs/heads/*)
+    // Read local branches (refs/heads/*)
     let branches = repo
-        .branches(None)
+        .branches(Some(BranchType::Local))
         .map_err(|e| anyhow::anyhow!("failed to read branches: {}", e))?;
 
     for branch_result in branches {
-        let (branch, branch_type) =
+        let (branch, _branch_type) =
             branch_result.map_err(|e| anyhow::anyhow!("failed to read branch: {}", e))?;
         if let Ok(Some(name)) = branch.name() {
             if let Some(oid) = branch.get().target() {
-                let ref_name = match branch_type {
-                    BranchType::Local => format!("refs/heads/{}", name),
-                    BranchType::Remote => format!("refs/remotes/{}", name),
-                };
+                let ref_name = format!("refs/heads/{}", name);
                 refs.insert(ref_name, oid.to_string());
             }
         }

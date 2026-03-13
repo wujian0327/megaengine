@@ -118,36 +118,48 @@ async fn try_send_pending_msg(
     };
     let data = serde_json::to_vec(&envelope)?;
 
-    let mgr = manager.lock().await;
-
     // Try to find if we are connected or have a known route?
     // Gossip usually just floods peers if not knowing better.
     // If we have direct connection or routing table, use it.
     // For now: broadcast to all connected peers.
 
-    let peers = mgr.list_peers().await;
+    // Obtain the current peer list while holding the mutex only briefly.
+    let peers = {
+        let mgr = manager.lock().await;
+        mgr.list_peers().await
+    };
+
     if peers.is_empty() {
         return Err(anyhow!("No peers connected to send message"));
     }
 
     if peers.contains(&receiver_node_id) {
         // Direct send to receiver; propagate any error to the caller.
-        mgr.send_gossip_message(receiver_node_id.clone(), data.clone())
-            .await
-            .map_err(|e| {
-                anyhow!(
-                    "Failed to send gossip message to receiver {}: {}",
-                    receiver_node_id,
-                    e
-                )
-            })?;
+        let send_result = {
+            let mgr = manager.lock().await;
+            mgr.send_gossip_message(receiver_node_id.clone(), data.clone())
+                .await
+        };
+
+        send_result.map_err(|e| {
+            anyhow!(
+                "Failed to send gossip message to receiver {}: {}",
+                receiver_node_id,
+                e
+            )
+        })?;
     } else {
         // Broadcast to all peers; require at least one successful send.
         let mut at_least_one_success = false;
         let mut last_err: Option<anyhow::Error> = None;
 
         for peer in peers {
-            match mgr.send_gossip_message(peer.clone(), data.clone()).await {
+            let send_result = {
+                let mgr = manager.lock().await;
+                mgr.send_gossip_message(peer.clone(), data.clone()).await
+            };
+
+            match send_result {
                 Ok(()) => {
                     at_least_one_success = true;
                 }
@@ -250,12 +262,6 @@ pub async fn process_incoming_chat(
         msg_id: msg.msg_id.clone(),
         timestamp: timestamp_now(),
         signature: "".to_string(),
-    };
-
-    let ack_sig = my_node.sign_message(msg.msg_id.as_bytes())?;
-    let ack_msg = ChatAckMessage {
-        signature: hex::encode(ack_sig),
-        ..ack_msg
     };
 
     let gossip_msg = GossipMessage::ChatAck(ack_msg);
