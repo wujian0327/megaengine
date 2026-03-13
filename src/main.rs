@@ -67,7 +67,7 @@ enum NodeAction {
         #[arg(long)]
         bootstrap_node: Option<String>,
 
-        /// Start MCP server alongside the node
+        /// Deprecated for node start: stdio MCP must run as a separate process via `megaengine mcp`
         #[arg(long, default_value = "false")]
         mcp: bool,
 

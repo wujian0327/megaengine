@@ -187,41 +187,10 @@ pub async fn process_incoming_chat(
 ) -> Result<()> {
     // 1. Check if it's for me
     if msg.receiver_id != *my_node.node_id() {
-        tracing::info!("Message not for me, forwarding to {}", msg.receiver_id);
-
-        // Construct the payload to forward
-        let gossip_msg = GossipMessage::Chat(msg.clone());
-
-        let mut signed_msg = SignedMessage {
-            node_id: my_node.node_id().clone(),
-            message: gossip_msg,
-            timestamp: timestamp_now(),
-            signature: "".to_string(),
-        };
-        let self_hash = signed_msg.self_hash();
-        let sign = my_node.sign_message(self_hash.as_slice())?;
-        signed_msg.signature = hex::encode(sign);
-
-        let envelope = Envelope {
-            payload: signed_msg,
-            ttl: TTL,
-        };
-        let data = serde_json::to_vec(&envelope)?;
-
-        let mgr = manager.lock().await;
-        let peers = mgr.list_peers().await;
-
-        if peers.contains(&msg.receiver_id) {
-            tracing::info!("Found target {} in neighbors, sending directly", msg.receiver_id);
-            let _ = mgr.send_gossip_message(msg.receiver_id.clone(), data).await;
-        } else {
-            tracing::info!("Target {} not in neighbors, broadcasting", msg.receiver_id);
-            for peer in peers {
-                if peer != msg.sender_id {
-                    let _ = mgr.send_gossip_message(peer.clone(), data.clone()).await;
-                }
-            }
-        }
+        tracing::info!(
+            "Message not for me (target: {}), skip local forwarding and let gossip handle it",
+            msg.receiver_id
+        );
 
         return Ok(());
     }
@@ -291,46 +260,15 @@ pub async fn process_incoming_chat(
 
 pub async fn process_ack(
     ack: ChatAckMessage,
-    manager: Arc<Mutex<ConnectionManager>>,
+    _manager: Arc<Mutex<ConnectionManager>>,
     my_node: Node,
 ) -> Result<()> {
     // 1. Check if it's for me
     if ack.target_id != *my_node.node_id() {
-        tracing::info!("ACK not for me (for {}), forwarding", ack.target_id);
-    
-        // Construct the payload to forward
-        let gossip_msg = GossipMessage::ChatAck(ack.clone());
-
-        let mut signed_msg = SignedMessage {
-            node_id: my_node.node_id().clone(),
-            message: gossip_msg,
-            timestamp: timestamp_now(),
-            signature: "".to_string(),
-        };
-        let self_hash = signed_msg.self_hash();
-        let sign = my_node.sign_message(self_hash.as_slice())?;
-        signed_msg.signature = hex::encode(sign);
-
-        let envelope = Envelope {
-            payload: signed_msg,
-            ttl: TTL,
-        };
-        let data = serde_json::to_vec(&envelope)?;
-
-        let mgr = manager.lock().await;
-        let peers = mgr.list_peers().await;
-
-        if peers.contains(&ack.target_id) {
-            tracing::info!("Found target {} in neighbors, sending ACK directly", ack.target_id);
-            let _ = mgr.send_gossip_message(ack.target_id.clone(), data).await;
-        } else {
-            tracing::info!("Target {} not in neighbors, broadcasting ACK", ack.target_id);
-            for peer in peers {
-                if peer != ack.sender_id {
-                    let _ = mgr.send_gossip_message(peer.clone(), data.clone()).await;
-                }
-            }
-        }
+        tracing::info!(
+            "ACK not for me (target: {}), skip local forwarding and let gossip handle it",
+            ack.target_id
+        );
         return Ok(());
     }
 

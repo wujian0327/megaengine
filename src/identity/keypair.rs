@@ -61,8 +61,6 @@ impl KeyPair {
     /// Encrypt a message for a specific recipient (identified by their Ed25519 VerifyingKey)
     /// Returns: Ephemeral_PK (32) + Nonce (12) + Ciphertext (N)
     pub fn encrypt_to_node(&self, recipient_vk: &VerifyingKey, message: &[u8]) -> Result<Vec<u8>> {
-        let _rng = OsRng;
-
         // 1. Convert Recipient Ed25519 PK -> X25519 PK (Montgomery)
         let recipient_ed_y = CompressedEdwardsY::from_slice(recipient_vk.as_bytes())?;
         let recipient_ed_point = recipient_ed_y
@@ -73,7 +71,13 @@ impl KeyPair {
         // 2. Generate Ephemeral Keypair
         let mut scalar_bytes = [0u8; 32];
         OsRng.fill_bytes(&mut scalar_bytes);
-        let ephemeral_scalar = Scalar::from_bytes_mod_order(scalar_bytes);
+
+        // Clamp scalar bytes to align with X25519 scalar requirements.
+        scalar_bytes[0] &= 248;
+        scalar_bytes[31] &= 127;
+        scalar_bytes[31] |= 64;
+
+        let ephemeral_scalar = Scalar::from_bits(scalar_bytes);
         let ephemeral_point = MontgomeryPoint::mul_base(&ephemeral_scalar);
 
         // 3. Keep Ephemeral Public Key

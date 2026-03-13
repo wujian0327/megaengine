@@ -150,13 +150,14 @@ pub async fn list_repos() -> Result<Vec<Repo>> {
 /// 更新 Repo 的 bundle 路径
 pub async fn update_repo_bundle(repo_id: &str, bundle_path: &str) -> Result<()> {
     let db = get_db_conn().await?;
+    let now = chrono::Local::now().timestamp();
 
     // 查询是否存在
     if let Some(model) = Entity::find_by_id(repo_id).one(&db).await? {
         let active_model = ActiveModel {
             id: Unchanged(model.id),
             bundle: Set(bundle_path.to_string()),
-            updated_at: Unchanged(model.updated_at),
+            updated_at: Set(now),
             // Keep other fields unchanged
             name: Unchanged(model.name),
             creator: Unchanged(model.creator),

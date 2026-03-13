@@ -13,7 +13,6 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::sync::{mpsc, RwLock};
-use tokio_stream::wrappers::UnboundedReceiverStream;
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
@@ -25,6 +24,31 @@ struct AppState {
 #[derive(Deserialize)]
 struct SessionParam {
     session_id: String,
+}
+
+struct SessionCleanup {
+    state: Arc<AppState>,
+    session_id: String,
+}
+
+impl SessionCleanup {
+    fn new(state: Arc<AppState>, session_id: String) -> Self {
+        Self { state, session_id }
+    }
+}
+
+impl Drop for SessionCleanup {
+    fn drop(&mut self) {
+        let state = Arc::clone(&self.state);
+        let session_id = self.session_id.clone();
+
+        tokio::spawn(async move {
+            let removed = state.sessions.write().await.remove(&session_id);
+            if removed.is_some() {
+                tracing::info!("SSE session cleaned up: {}", session_id);
+            }
+        });
+    }
 }
 
 pub async fn start_sse_server(addr: SocketAddr) -> anyhow::Result<()> {
@@ -58,7 +82,10 @@ async fn sse_handler(
         .await
         .insert(session_id.clone(), tx.clone());
 
-    let stream = UnboundedReceiverStream::new(rx);
+    let stream = futures::stream::unfold(
+        (rx, SessionCleanup::new(state.clone(), session_id.clone())),
+        |(mut rx, cleanup)| async move { rx.recv().await.map(|event| (event, (rx, cleanup))) },
+    );
 
     // Send the endpoint event immediately
     let endpoint_url = format!("/messages?session_id={}", session_id);
@@ -142,7 +169,7 @@ async fn message_handler(
                                                 "isError": false
                                             }
                                         }))
-                                    },
+                                    }
                                     Err(e) => Some(json!({
                                         "jsonrpc": "2.0",
                                         "id": request.get("id"),
@@ -176,13 +203,31 @@ async fn message_handler(
                             }))
                         }
                     }
-                    // Handle other JSON-RPC methods or notifications if needed
-                    _ => None,
+                    // For unknown methods, reply only when this is a request (has id).
+                    _ => {
+                        if request.get("id").is_some() {
+                            Some(json!({
+                                "jsonrpc": "2.0",
+                                "id": request.get("id"),
+                                "error": {
+                                    "code": -32601,
+                                    "message": "Method not found"
+                                }
+                            }))
+                        } else {
+                            None
+                        }
+                    }
                 };
 
                 if let Some(response) = response {
                     if let Ok(data) = serde_json::to_string(&response) {
-                        let _ = tx.send(Ok(Event::default().event("message").data(data)));
+                        if tx
+                            .send(Ok(Event::default().event("message").data(data)))
+                            .is_err()
+                        {
+                            state.sessions.write().await.remove(&session_id);
+                        }
                     }
                 }
             } else {
@@ -196,7 +241,12 @@ async fn message_handler(
                     }
                 });
                 if let Ok(data) = serde_json::to_string(&error_response) {
-                    let _ = tx.send(Ok(Event::default().event("message").data(data)));
+                    if tx
+                        .send(Ok(Event::default().event("message").data(data)))
+                        .is_err()
+                    {
+                        state.sessions.write().await.remove(&session_id);
+                    }
                 }
             }
         });

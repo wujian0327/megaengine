@@ -67,7 +67,6 @@ impl GossipService {
                         ttl: DEFAULT_TTL,
                     };
                     tracing::debug!("Broadcasting NodeAnnouncement: {:?}", env);
-                    tracing::debug!("Broadcasting NodeAnnouncement: {:?}", env);
                     let data = serde_json::to_vec(&env).unwrap_or_default();
                     let mgr = s2.manager.lock().await;
                     let peers = mgr.list_peers().await;
@@ -88,7 +87,6 @@ impl GossipService {
                                 ttl: DEFAULT_TTL,
                             };
                             tracing::debug!("Broadcasting RepoAnnouncement: {:?}", env);
-                            tracing::debug!("Broadcasting RepoAnnouncement: {:?}", env);
                             let data = serde_json::to_vec(&env).unwrap_or_default();
                             let mgr = s2.manager.lock().await;
                             let peers = mgr.list_peers().await;
@@ -99,7 +97,6 @@ impl GossipService {
                     }
                 }
 
-                tokio::time::sleep(Duration::from_secs(30)).await;
                 tokio::time::sleep(Duration::from_secs(30)).await;
             }
         });
@@ -158,6 +155,17 @@ impl GossipService {
                 );
                 return Ok(());
             }
+        }
+
+        // Ensure outer signer identity matches the embedded payload sender identity.
+        // This prevents payload-level sender_id spoofing.
+        if signed.node_id != *signed.message.sender() {
+            tracing::error!(
+                "message sender mismatch: signed node {} != payload sender {}",
+                signed.node_id,
+                signed.message.sender()
+            );
+            return Ok(());
         }
 
         // process message (borrow the inner message to avoid moving)

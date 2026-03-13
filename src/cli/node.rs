@@ -1,5 +1,5 @@
 use anyhow::Result;
-use megaengine::mcp::{start_mcp_server, start_sse_server};
+use megaengine::mcp::start_sse_server;
 use megaengine::{
     bundle::BundleService, node::node_addr::NodeAddr, storage, transport::config::QuicConfig,
 };
@@ -113,21 +113,19 @@ pub async fn handle_node_start(
     println!("Press Ctrl+C to stop");
 
     if enable_mcp {
-        tracing::info!("MCP server enabled, starting alongside node");
-        println!("MCP server is enabled");
-        std::thread::spawn(|| {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            if let Err(e) = rt.block_on(start_mcp_server()) {
-                tracing::error!("MCP server error: {}", e);
-            }
-        });
+        tracing::warn!(
+            "--mcp (stdio) is ignored during node start to avoid stdin/stdout contention; use `megaengine mcp` in a separate process"
+        );
+        eprintln!(
+            "Warning: --mcp (stdio) is not started with `node start`. Run `megaengine mcp` in a separate process."
+        );
     }
 
     if let Some(port) = mcp_sse_port {
         tracing::info!("MCP SSE server enabled on port {}", port);
         println!("MCP SSE server enabled on port {}", port);
         tokio::spawn(async move {
-            let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
             if let Err(e) = start_sse_server(addr).await {
                 tracing::error!("MCP SSE server error: {}", e);
             }
