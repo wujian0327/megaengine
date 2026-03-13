@@ -107,7 +107,7 @@ pub async fn get_db_conn() -> Result<DatabaseConnection> {
     let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
 
     let mut opt = ConnectOptions::new(db_url);
-    opt.max_connections(100)
+    opt.max_connections(10)
         .min_connections(1)
         .connect_timeout(Duration::from_secs(8))
         .idle_timeout(Duration::from_secs(8))
