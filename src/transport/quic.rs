@@ -235,8 +235,11 @@ impl ConnectionManager {
                 let mut dead_nodes = Vec::new();
 
                 for (node_id, conn) in conns.iter() {
-                    if conn.connection.close_reason().is_some() {
-                        info!("Connection to node[{}] closed", node_id);
+                    if let Some(reason) = conn.connection.close_reason() {
+                        info!(
+                            "Connection to node[{}] closed, reason: {:?}",
+                            node_id, reason
+                        );
                         dead_nodes.push(node_id.clone());
                     }
                 }

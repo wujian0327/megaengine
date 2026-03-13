@@ -117,7 +117,14 @@ impl QuicConfig {
 
         client_crypto.alpn_protocols = ALPN_QUIC_HTTP.iter().map(|&x| x.into()).collect();
         client_crypto.enable_early_data = false;
-        let client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto)?));
+        let mut client_config =
+            ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto)?));
+
+        let mut transport_config = TransportConfig::default();
+        transport_config.max_idle_timeout(Some(IdleTimeout::from(VarInt::from_u32(300_000))));
+        transport_config.keep_alive_interval(Some(Duration::from_secs(30)));
+        client_config.transport_config(Arc::new(transport_config));
+
         Ok(client_config)
     }
 
