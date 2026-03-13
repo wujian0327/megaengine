@@ -154,13 +154,11 @@ async fn message_handler(
 
                             if let Some(name) = name {
                                 match RepoMcpServer::execute_tool(name, args).await {
-                                    Ok(result_value) => {
-                                        Some(json!({
-                                            "jsonrpc": "2.0",
-                                            "id": request.get("id"),
-                                            "result": result_value
-                                        }))
-                                    }
+                                    Ok(result_value) => Some(json!({
+                                        "jsonrpc": "2.0",
+                                        "id": request.get("id"),
+                                        "result": result_value
+                                    })),
                                     Err(e) => Some(json!({
                                         "jsonrpc": "2.0",
                                         "id": request.get("id"),

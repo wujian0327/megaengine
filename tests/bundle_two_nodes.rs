@@ -71,8 +71,14 @@ async fn test_bundle_transfer_between_two_nodes() {
     fs::remove_dir_all(&cert_dir).ok();
     fs::create_dir_all(&cert_dir).expect("Failed to create test cert directory");
 
-    let sender_cert_path = cert_dir.join("cert_sender.pem").to_string_lossy().to_string();
-    let sender_key_path = cert_dir.join("key_sender.pem").to_string_lossy().to_string();
+    let sender_cert_path = cert_dir
+        .join("cert_sender.pem")
+        .to_string_lossy()
+        .to_string();
+    let sender_key_path = cert_dir
+        .join("key_sender.pem")
+        .to_string_lossy()
+        .to_string();
     let receiver_cert_path = cert_dir
         .join("cert_receiver.pem")
         .to_string_lossy()
