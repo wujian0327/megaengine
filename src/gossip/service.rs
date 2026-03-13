@@ -1,4 +1,4 @@
-use crate::gossip::message::{GossipMessage, SignedMessage};
+use crate::gossip::message::{Envelope, GossipMessage, SignedMessage};
 use crate::node::node::{Node, NodeInfo};
 use crate::node::node_id::NodeId;
 use crate::repo::repo_manager::RepoManager;
@@ -7,7 +7,6 @@ use crate::transport::quic::ConnectionManager;
 use anyhow::Result;
 use ed25519_dalek::Signature;
 use hex;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::sync::Arc;
@@ -23,12 +22,6 @@ pub struct GossipService {
     node: Node,
     repo_manager: Option<Arc<Mutex<RepoManager>>>,
     seen: Arc<Mutex<HashMap<String, Instant>>>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-struct Envelope {
-    payload: SignedMessage,
-    ttl: u8,
 }
 
 impl GossipService {
@@ -373,17 +366,34 @@ impl GossipService {
                     }
                 }
             }
+            GossipMessage::Chat(c) => {
+                if let Err(e) = crate::chat::service::process_incoming_chat(
+                    c.clone(),
+                    self.manager.clone(),
+                    self.node.clone(),
+                )
+                .await
+                {
+                    tracing::error!("Error processing chat message: {}", e);
+                }
+            }
+            GossipMessage::ChatAck(ack) => {
+                if let Err(e) = crate::chat::service::process_ack(
+                    ack.clone(),
+                    self.manager.clone(),
+                    self.node.clone(),
+                )
+                .await
+                {
+                    tracing::error!("Error processing chat ack: {}", e);
+                }
+            }
         }
 
         // forward if ttl > 0
         if ttl > 0 {
             ttl -= 1;
-            #[derive(Serialize, Deserialize, Clone)]
-            struct Envelope2 {
-                payload: SignedMessage,
-                ttl: u8,
-            }
-            let fwd = Envelope2 {
+            let fwd = Envelope {
                 payload: signed.clone(),
                 ttl,
             };

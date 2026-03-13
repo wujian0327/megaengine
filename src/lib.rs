@@ -1,4 +1,5 @@
 pub mod bundle;
+pub mod chat;
 pub mod git;
 pub mod gossip;
 pub mod identity;

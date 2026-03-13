@@ -47,11 +47,12 @@ impl rustls::client::danger::ServerCertVerifier for NoServerCertificateVerificat
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::ED25519,
-        ]
+        let provider = rustls::crypto::CryptoProvider::get_default()
+            .cloned()
+            .unwrap_or(Arc::new(rustls::crypto::ring::default_provider()));
+        provider
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 }
 

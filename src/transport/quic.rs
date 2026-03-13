@@ -396,6 +396,29 @@ mod tests {
         });
     }
 
+    fn cleanup_test_certs() {
+        let files = [
+            "cert/cert.pem",
+            "cert/key.pem",
+            "cert/cert2.pem",
+            "cert/key2.pem",
+            "cert/ca-cert.pem",
+            "cert/ca-cert-key.pem",
+            "cert/no-shared-ca-cert1.pem",
+            "cert/no-shared-ca-key1.pem",
+            "cert/no-shared-ca-cert2.pem",
+            "cert/no-shared-ca-key2.pem",
+            "cert/no-shared-ca1.pem",
+            "cert/no-shared-ca1-key.pem",
+            "cert/no-shared-ca2.pem",
+            "cert/no-shared-ca2-key.pem",
+        ];
+
+        for file in files {
+            let _ = std::fs::remove_file(file);
+        }
+    }
+
     // Mock configuration for the tests
     fn mock_quic_config() -> QuicConfig {
         // tracing subscriber may only be initialized once per process; ignore error if already set.
@@ -437,10 +460,41 @@ mod tests {
         )
     }
 
+    fn mock_quic_config_no_shared_ca_1() -> QuicConfig {
+        let _ = crate::transport::cert::ensure_certificates(
+            "cert/no-shared-ca-cert1.pem",
+            "cert/no-shared-ca-key1.pem",
+            "cert/no-shared-ca1.pem",
+        );
+
+        QuicConfig::new(
+            "0.0.0.0:0".parse().unwrap(),
+            "cert/no-shared-ca-cert1.pem".to_string(),
+            "cert/no-shared-ca-key1.pem".to_string(),
+            "cert/no-shared-ca1.pem".to_string(),
+        )
+    }
+
+    fn mock_quic_config_no_shared_ca_2() -> QuicConfig {
+        let _ = crate::transport::cert::ensure_certificates(
+            "cert/no-shared-ca-cert2.pem",
+            "cert/no-shared-ca-key2.pem",
+            "cert/no-shared-ca2.pem",
+        );
+
+        QuicConfig::new(
+            "0.0.0.0:0".parse().unwrap(),
+            "cert/no-shared-ca-cert2.pem".to_string(),
+            "cert/no-shared-ca-key2.pem".to_string(),
+            "cert/no-shared-ca2.pem".to_string(),
+        )
+    }
+
     // Test the `server` method
     #[tokio::test]
     async fn test_server_creation() {
         init();
+        cleanup_test_certs();
         let config = mock_quic_config();
 
         let manager = ConnectionManager::run_server(config).await;
@@ -449,12 +503,14 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(500)).await;
         let quic_transport = manager.unwrap();
         assert!(quic_transport.connections.lock().await.is_empty());
+        cleanup_test_certs();
     }
 
     // Test the `connect` method
     #[tokio::test]
     async fn test_client_connection() {
         init();
+        cleanup_test_certs();
         let keypair1 = KeyPair::generate().expect("generate keypair");
         let keypair2 = KeyPair::generate().expect("generate keypair");
 
@@ -508,11 +564,13 @@ mod tests {
 
         assert!(connections1.contains_key(&node2.node_id().clone()));
         assert!(connections2.contains_key(&node1.node_id().clone()));
+        cleanup_test_certs();
     }
 
     #[tokio::test]
     async fn test_send_message() {
         init();
+        cleanup_test_certs();
         let keypair1 = KeyPair::generate().expect("generate keypair");
         let keypair2 = KeyPair::generate().expect("generate keypair");
 
@@ -569,5 +627,63 @@ mod tests {
             .await
             .unwrap();
         tokio::time::sleep(Duration::from_millis(500)).await;
+        cleanup_test_certs();
+    }
+
+    #[tokio::test]
+    async fn test_client_connection_without_shared_ca() {
+        init();
+        cleanup_test_certs();
+        let keypair1 = KeyPair::generate().expect("generate keypair");
+        let keypair2 = KeyPair::generate().expect("generate keypair");
+
+        let config1 = mock_quic_config_no_shared_ca_1();
+        let manager1 = ConnectionManager::run_server(config1).await;
+        assert!(manager1.is_ok());
+        let manager1 = manager1.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let addr1 = manager1.endpoint.local_addr().expect("get local addr");
+        let addr1 = format!("127.0.0.1:{}", addr1.port()).parse().unwrap();
+        let node1 = Node::new(
+            NodeId::from_keypair(&keypair1),
+            "",
+            vec![addr1],
+            NodeType::Normal,
+            keypair1.clone(),
+        );
+
+        let config2 = mock_quic_config_no_shared_ca_2();
+        let manager2 = ConnectionManager::run_server(config2).await;
+        assert!(manager2.is_ok());
+        let manager2 = manager2.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let addr2 = manager2.endpoint.local_addr().expect("get local addr");
+        let addr2 = format!("127.0.0.1:{}", addr2.port()).parse().unwrap();
+        let node2 = Node::new(
+            NodeId::from_keypair(&keypair2),
+            "",
+            vec![addr2],
+            NodeType::Normal,
+            keypair2.clone(),
+        );
+
+        let result = manager2
+            .connect(
+                node2.node_id().clone(),
+                node1.node_id().clone(),
+                node1.addresses().to_vec(),
+            )
+            .await;
+        assert!(result.is_ok());
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let connections1 = manager1.connections.lock().await;
+        let connections2 = manager2.connections.lock().await;
+        assert!(connections1.contains_key(&node2.node_id().clone()));
+        assert!(connections2.contains_key(&node1.node_id().clone()));
+        cleanup_test_certs();
     }
 }

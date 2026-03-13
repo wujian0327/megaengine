@@ -84,6 +84,14 @@ pub async fn handle_node_start(
         // 启动 Repo 同步后台任务
         megaengine::repo::start_repo_sync_task().await;
         tracing::info!("Repo sync task started");
+
+        // Start Chat Sender Task
+        let chat_node = node.clone();
+        let chat_mgr = Arc::clone(conn_mgr);
+        tokio::spawn(async move {
+            let _ = megaengine::chat::service::start_chat_sender_task(chat_mgr, chat_node).await;
+        });
+        tracing::info!("Chat sender task started");
     } else {
         tracing::warn!("No connection manager found, services not started");
     }

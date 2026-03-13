@@ -116,6 +116,8 @@ impl RepoMcpServer {
                             "repo_id": repo.repo_id,
                             "name": repo.p2p_description.name,
                             "creator": repo.p2p_description.creator,
+                            "language": repo.p2p_description.language,
+                            "size": repo.p2p_description.size,
                             "description": repo.p2p_description.description,
                             "path": repo.path.display().to_string(),
                             "bundle": repo.bundle.display().to_string(),
@@ -137,6 +139,16 @@ impl RepoMcpServer {
                                     })
                                     .collect();
                                 repo_info["refs"] = Value::Array(refs);
+
+                                let mut has_updates = false;
+                                if !repo.path.as_os_str().is_empty() && repo.path.exists() {
+                                    if let Ok(current_refs) = crate::git::git_repo::read_repo_refs(
+                                        repo.path.to_str().unwrap_or(""),
+                                    ) {
+                                        has_updates = current_refs != local_refs;
+                                    }
+                                }
+                                repo_info["has_updates"] = Value::Bool(has_updates);
                             }
                         }
 

@@ -4,7 +4,7 @@ use anyhow::Result;
 use sea_orm::entity::prelude::*;
 use sea_orm::{Set, Unchanged};
 
-use crate::{repo::repo::Repo, storage::init_db};
+use crate::{repo::repo::Repo, storage::get_db_conn};
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "repos")]
@@ -31,7 +31,7 @@ impl ActiveModelBehavior for ActiveModel {}
 
 /// 保存或更新 Repo 到数据库
 pub async fn save_repo_to_db(repo: &Repo) -> Result<()> {
-    let db = init_db().await?;
+    let db = get_db_conn().await?;
     let now = chrono::Local::now().timestamp();
 
     // 查询是否已存在
@@ -81,7 +81,7 @@ pub async fn save_repo_to_db(repo: &Repo) -> Result<()> {
 
 /// 从数据库加载 Repo
 pub async fn load_repo_from_db(repo_id: &str) -> Result<Option<Repo>> {
-    let db = init_db().await?;
+    let db = get_db_conn().await?;
 
     // 使用 find_by_id 直接查询
     if let Some(model) = Entity::find_by_id(repo_id).one(&db).await? {
@@ -111,7 +111,7 @@ pub async fn load_repo_from_db(repo_id: &str) -> Result<Option<Repo>> {
 
 /// 删除 Repo 从数据库
 pub async fn delete_repo_from_db(repo_id: &str) -> Result<()> {
-    let db = init_db().await?;
+    let db = get_db_conn().await?;
     Entity::delete_by_id(repo_id).exec(&db).await?;
     // Delete associated refs
     crate::storage::ref_model::delete_refs_for_repo(repo_id).await?;
@@ -120,7 +120,7 @@ pub async fn delete_repo_from_db(repo_id: &str) -> Result<()> {
 
 /// 列出所有 Repos
 pub async fn list_repos() -> Result<Vec<Repo>> {
-    let db = init_db().await?;
+    let db = get_db_conn().await?;
     let models = Entity::find().all(&db).await?;
 
     let mut repos = Vec::new();
@@ -149,7 +149,7 @@ pub async fn list_repos() -> Result<Vec<Repo>> {
 
 /// 更新 Repo 的 bundle 路径
 pub async fn update_repo_bundle(repo_id: &str, bundle_path: &str) -> Result<()> {
-    let db = init_db().await?;
+    let db = get_db_conn().await?;
 
     // 查询是否存在
     if let Some(model) = Entity::find_by_id(repo_id).one(&db).await? {

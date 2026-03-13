@@ -34,6 +34,11 @@ enum Commands {
         #[command(subcommand)]
         action: RepoAction,
     },
+    /// Chat P2P commands
+    Chat {
+        #[command(subcommand)]
+        action: crate::cli::chat::ChatCommand,
+    },
     /// Start MCP server (Stdio mode)
     Mcp,
 }
@@ -133,6 +138,9 @@ async fn main() -> Result<()> {
         }
         Commands::Repo { action } => {
             handle_repo(action).await?;
+        }
+        Commands::Chat { action } => {
+            crate::cli::handle_chat(action).await?;
         }
         Commands::Mcp => {
             start_mcp_server().await?;
